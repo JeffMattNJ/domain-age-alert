@@ -25,7 +25,7 @@
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
-        <SourceLocation DefaultValue="GITHUB_PAGES_URL/taskpane.html"/>
+        <SourceLocation DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/taskpane.html"/>
         <RequestedHeight>300</RequestedHeight>
       </DesktopSettings>
     </Form>
@@ -76,13 +76,13 @@
 
     <Resources>
       <bt:Images>
-        <bt:Image id="Icon.16x16" DefaultValue="GITHUB_PAGES_URL/icon-16.png"/>
-        <bt:Image id="Icon.32x32" DefaultValue="GITHUB_PAGES_URL/icon-32.png"/>
-        <bt:Image id="Icon.80x80" DefaultValue="GITHUB_PAGES_URL/icon-80.png"/>
+        <bt:Image id="Icon.16x16" DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/icon-16.png"/>
+        <bt:Image id="Icon.32x32" DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/icon-32.png"/>
+        <bt:Image id="Icon.80x80" DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Commands.Url" DefaultValue="GITHUB_PAGES_URL/commands.html"/>
-        <bt:Url id="Taskpane.Url" DefaultValue="GITHUB_PAGES_URL/taskpane.html"/>
+        <bt:Url id="Commands.Url" DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/commands.html"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GroupLabel" DefaultValue="Security"/>
