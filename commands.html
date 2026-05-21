@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <script>
+    /**
+     * commands.html — Background event handler
+     *
+     * Runs silently when a message is opened (Exchange Online / Microsoft 365).
+     * Injects a persistent notification bar for domains under 30 days old.
+     *
+     * Security:   HTTPS-only fetches, 5s timeout, XSS-safe textContent only
+     * Performance: localStorage cache (24h TTL) prevents repeat RDAP calls
+     * Safety:     All errors are silently swallowed — never interrupts mail flow
+     */
+
+    const CACHE_PREFIX  = 'domainAge_v1_';
+    const CACHE_TTL_MS  = 24 * 60 * 60 * 1000; // 24 hours
+    const FETCH_TIMEOUT = 5000;                  // 5 seconds
+
+    Office.onReady(() => {
+      // Intentionally empty — handlers are registered by the manifest LaunchEvent
+    });
+
+    // ── Main handler — called by Outlook on message open ────────────────────
+    async function onMessageReadHandler(event) {
+      try {
+        const item = Office.context.mailbox.item;
+        if (!item?.from?.emailAddress) { event.completed(); return; }
+
+        const domain = item.from.emailAddress.split("@")[1]?.toLowerCase();
+        if (!domain) { event.completed(); return; }
+
+        // Skip well-known safe providers to avoid unnecessary RDAP calls
+        const knownSafe = ["gmail.com","yahoo.com","outlook.com","hotmail.com",
+                           "icloud.com","microsoft.com","apple.com","amazon.com"];
+        if (knownSafe.includes(domain)) { event.completed(); return; }
+
+        const createdDate = await getCachedOrLookup(domain);
+        if (!createdDate) { event.completed(); return; }
+
+        const diffDays = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
+
+        if (diffDays <= 30) {
+          const msg = diffDays <= 3
+            ? `🚨 CRITICAL: Sender domain "${domain}" is only ${diffDays} day(s) old — very likely phishing!`
+            : diffDays <= 7
+            ? `🚨 WARNING: Sender domain "${domain}" registered ${diffDays} days ago — high phishing risk.`
+            : `⚠️ CAUTION: Sender domain "${domain}" registered ${diffDays} days ago. Verify before acting.`;
+
+          // replaceAsync avoids duplicate banners if handler fires twice
+          Office.context.mailbox.item.notificationMessages.replaceAsync(
+            "domainAgeAlert",
+            {
+              type: Office.MailboxEnums.ItemNotificationMessageType.InformationalMessage,
+              message: msg,
+              icon: "Icon.16x16",
+              persistent: true
+            }
+          );
+        }
+      } catch (_) {
+        // Silent fail — never block or delay mail reading
+      }
+
+      event.completed();
+    }
+
+    // ── Cache-aware RDAP lookup ──────────────────────────────────────────────
+    async function getCachedOrLookup(domain) {
+      // 1. Check localStorage cache
+      try {
+        const raw = localStorage.getItem(CACHE_PREFIX + domain);
+        if (raw) {
+          const entry = JSON.parse(raw);
+          if (Date.now() - entry.ts < CACHE_TTL_MS && entry.createdDate) {
+            return new Date(entry.createdDate);
+          }
+          localStorage.removeItem(CACHE_PREFIX + domain);
+        }
+      } catch (_) { /* storage unavailable */ }
+
+      // 2. Live RDAP lookup
+      const createdDate = await rdapLookup(domain);
+
+      // 3. Cache result (even null, to avoid hammering RDAP on unknown domains)
+      try {
+        localStorage.setItem(CACHE_PREFIX + domain, JSON.stringify({
+          createdDate: createdDate ? createdDate.toISOString() : null,
+          ts: Date.now()
+        }));
+      } catch (_) { /* quota exceeded — skip */ }
+
+      return createdDate;
+    }
+
+    // ── Fetch with abort timeout ─────────────────────────────────────────────
+    async function fetchTimeout(url) {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
+      try {
+        const res = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(timer);
+        return res;
+      } catch (e) {
+        clearTimeout(timer);
+        throw e;
+      }
+    }
+
+    // ── RDAP lookup (primary + fallback) ─────────────────────────────────────
+    async function rdapLookup(domain) {
+      // Primary: resolve correct RDAP endpoint via IANA bootstrap
+      try {
+        const tld = domain.split(".").pop();
+        const bRes = await fetchTimeout("https://data.iana.org/rdap/dns.json");
+        if (bRes.ok) {
+          const boot = await bRes.json();
+          let base = null;
+          for (const [tlds, urls] of (boot.services || [])) {
+            if (tlds.includes(tld) && urls.length > 0) { base = urls[0]; break; }
+          }
+          if (base) {
+            const dRes = await fetchTimeout(`${base}domain/${domain}`);
+            if (dRes.ok) {
+              const d = await dRes.json();
+              const ev = (d.events || []).find(e => e.eventAction === "registration");
+              if (ev) return new Date(ev.eventDate);
+            }
+          }
+        }
+      } catch (_) { /* fall through */ }
+
+      // Fallback: rdap.org proxy
+      try {
+        const res = await fetchTimeout(`https://rdap.org/domain/${domain}`);
+        if (res.ok) {
+          const d = await res.json();
+          const ev = (d.events || []).find(e => e.eventAction === "registration");
+          if (ev) return new Date(ev.eventDate);
+        }
+      } catch (_) { /* failed */ }
+
+      return null;
+    }
+  </script>
+</head>
+<body></body>
+</html>

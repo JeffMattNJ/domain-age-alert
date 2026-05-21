@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Domain Age Alert</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #222535;
+      --border: #2e3248;
+      --text: #e8eaf0;
+      --muted: #7b82a0;
+      --safe: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --critical: #ff2d55;
+      --accent: #6366f1;
+      --font: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .shield-icon {
+      width: 32px; height: 32px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+    header p  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    #alert-banner {
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      display: none;
+      border: 1px solid transparent;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    #alert-banner.critical { background: rgba(255,45,85,0.12);  border-color: var(--critical); }
+    #alert-banner.danger   { background: rgba(239,68,68,0.12);  border-color: var(--danger); }
+    #alert-banner.warn     { background: rgba(245,158,11,0.12); border-color: var(--warn); }
+    #alert-banner.safe     { background: rgba(34,197,94,0.1);   border-color: var(--safe); }
+
+    .alert-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .alert-icon   { font-size: 20px; }
+    .alert-title  { font-size: 13px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
+    .alert-body   { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+    .info-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: var(--muted); }
+    .info-value { font-weight: 600; text-align: right; max-width: 60%; word-break: break-all; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+    .badge-critical { background: rgba(255,45,85,0.2);  color: var(--critical); }
+    .badge-danger   { background: rgba(239,68,68,0.2);  color: var(--danger); }
+    .badge-warn     { background: rgba(245,158,11,0.2); color: var(--warn); }
+    .badge-safe     { background: rgba(34,197,94,0.15); color: var(--safe); }
+
+    /* Cache indicator */
+    .cache-badge {
+      display: inline-block;
+      font-size: 10px;
+      color: var(--muted);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    .tips-section { margin-top: 14px; }
+    .tips-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+    .tip { display: flex; gap: 8px; font-size: 11px; color: var(--muted); margin-bottom: 6px; line-height: 1.5; }
+    .tip-dot { width: 5px; height: 5px; background: var(--accent); border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+
+    #loading { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 12px; }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #loading-status { font-size: 11px; color: var(--muted); margin-top: 6px; min-height: 16px; }
+
+    #error-msg {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    #main-content { display: none; }
+
+    .refresh-btn {
+      display: block;
+      width: 100%;
+      margin-top: 12px;
+      padding: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+      font-family: var(--font);
+      transition: border-color 0.15s;
+    }
+    .refresh-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    footer { margin-top: 16px; text-align: center; font-size: 10px; color: var(--border); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="shield-icon">🛡️</div>
+    <div>
+      <h1>Domain Age Alert</h1>
+      <p>Phishing &amp; scam domain detector</p>
+    </div>
+  </header>
+
+  <div id="loading">
+    <div class="spinner"></div>
+    Checking sender domain…
+    <div id="loading-status"></div>
+  </div>
+
+  <div id="error-msg">
+    <div style="font-size:24px;margin-bottom:8px;">⚠️</div>
+    Could not retrieve domain information.<br>
+    <span id="error-detail"></span>
+    <button class="refresh-btn" onclick="retryLookup()">↺ Retry</button>
+  </div>
+
+  <div id="main-content">
+    <div id="alert-banner">
+      <div class="alert-header">
+        <span class="alert-icon" id="alert-icon"></span>
+        <span class="alert-title" id="alert-title"></span>
+      </div>
+      <div class="alert-body" id="alert-body"></div>
+    </div>
+
+    <div class="info-card">
+      <div class="info-row">
+        <span class="info-label">Sender</span>
+        <span class="info-value" id="info-sender">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Domain</span>
+        <span class="info-value" id="info-domain">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Registered</span>
+        <span class="info-value" id="info-registered">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Domain Age</span>
+        <span class="info-value" id="info-age">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Registrar</span>
+        <span class="info-value" id="info-registrar">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Risk Level</span>
+        <span class="info-value"><span class="badge" id="info-risk">—</span></span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Data Source</span>
+        <span class="info-value" id="info-source">—</span>
+      </div>
+    </div>
+
+    <div class="tips-section" id="tips-section" style="display:none;">
+      <div class="tips-title">⚡ What to watch for</div>
+      <div class="tip"><div class="tip-dot"></div>Do not click links or download attachments from this email.</div>
+      <div class="tip"><div class="tip-dot"></div>Verify the sender through a separate, known channel before responding.</div>
+      <div class="tip"><div class="tip-dot"></div>Newly registered domains are a top indicator of phishing campaigns.</div>
+      <div class="tip"><div class="tip-dot"></div>Report this email as phishing if it requests personal or financial information.</div>
+    </div>
+
+    <button class="refresh-btn" onclick="retryLookup(true)">↺ Refresh (bypass cache)</button>
+  </div>
+
+  <footer>Domain Age Alert · for Microsoft Outlook</footer>
+
+  <script>
+    // ── Config ───────────────────────────────────────────────────────────────
+    const CACHE_TTL_MS   = 24 * 60 * 60 * 1000; // 24 hours
+    const FETCH_TIMEOUT  = 5000;                  // 5 seconds per request
+    const CACHE_PREFIX   = 'domainAge_v1_';
+
+    let currentDomain = null;
+    let currentEmail  = null;
+
+    // ── Entry point ──────────────────────────────────────────────────────────
+    Office.onReady(async () => {
+      try {
+        const item = Office.context.mailbox.item;
+        const from = item.from;
+
+        if (!from || !from.emailAddress) { showError("Could not read sender address."); return; }
+
+        currentEmail  = from.emailAddress;
+        currentDomain = currentEmail.split("@")[1]?.toLowerCase();
+
+        if (!currentDomain) { showError("Could not parse sender domain."); return; }
+
+        const displayName = from.displayName;
+        document.getElementById("info-sender").textContent =
+          displayName ? `${displayName} <${currentEmail}>` : currentEmail;
+        document.getElementById("info-domain").textContent = currentDomain;
+
+        await runLookup(currentDomain, false);
+      } catch (err) {
+        showError(err.message || "Unknown error");
+      }
+    });
+
+    async function retryLookup(bypassCache = false) {
+      if (!currentDomain) return;
+      document.getElementById("main-content").style.display = "none";
+      document.getElementById("error-msg").style.display    = "none";
+      document.getElementById("loading").style.display      = "block";
+      document.getElementById("loading-status").textContent = "";
+      await runLookup(currentDomain, bypassCache);
+    }
+
+    async function runLookup(domain, bypassCache) {
+      // ── 1. Check cache first ──────────────────────────────────────────────
+      if (!bypassCache) {
+        const cached = getCache(domain);
+        if (cached) {
+          setStatus("Loaded from cache");
+          renderResult(domain, {
+            createdDate: cached.createdDate ? new Date(cached.createdDate) : null,
+            registrar:   cached.registrar,
+            source:      "Cache (< 24h old)"
+          });
+          return;
+        }
+      }
+
+      // ── 2. Live RDAP lookup ───────────────────────────────────────────────
+      const result = await lookupDomain(domain);
+
+      // ── 3. Store in cache ─────────────────────────────────────────────────
+      if (result.createdDate) {
+        setCache(domain, {
+          createdDate: result.createdDate.toISOString(),
+          registrar:   result.registrar,
+          ts:          Date.now()
+        });
+      }
+
+      renderResult(domain, result);
+    }
+
+    // ── Cache helpers ─────────────────────────────────────────────────────────
+    function getCache(domain) {
+      try {
+        const raw = localStorage.getItem(CACHE_PREFIX + domain);
+        if (!raw) return null;
+        const entry = JSON.parse(raw);
+        if (Date.now() - entry.ts > CACHE_TTL_MS) {
+          localStorage.removeItem(CACHE_PREFIX + domain);
+          return null;
+        }
+        return entry;
+      } catch (_) { return null; }
+    }
+
+    function setCache(domain, data) {
+      try { localStorage.setItem(CACHE_PREFIX + domain, JSON.stringify(data)); }
+      catch (_) { /* storage quota exceeded — skip silently */ }
+    }
+
+    // ── Fetch with timeout ────────────────────────────────────────────────────
+    async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timer);
+        return res;
+      } catch (err) {
+        clearTimeout(timer);
+        throw err;
+      }
+    }
+
+    // ── RDAP Domain Lookup ────────────────────────────────────────────────────
+    async function lookupDomain(domain) {
+      const tld = domain.split(".").pop();
+      let createdDate = null;
+      let registrar   = null;
+      let source      = null;
+
+      // Step 1: IANA bootstrap → find correct RDAP server for this TLD
+      setStatus("Finding RDAP server…");
+      try {
+        const bootstrapRes = await fetchWithTimeout("https://data.iana.org/rdap/dns.json");
+        if (bootstrapRes.ok) {
+          const bootstrap = await bootstrapRes.json();
+          let rdapBase = null;
+          for (const [tlds, urls] of (bootstrap.services || [])) {
+            if (tlds.includes(tld) && urls.length > 0) { rdapBase = urls[0]; break; }
+          }
+
+          if (rdapBase) {
+            setStatus(`Querying ${rdapBase.replace("https://","").split("/")[0]}…`);
+            try {
+              const rdapRes = await fetchWithTimeout(`${rdapBase}domain/${domain}`);
+              if (rdapRes.ok) {
+                const raw = await rdapRes.json();
+                ({ createdDate, registrar } = parseRdap(raw));
+                if (createdDate) source = rdapBase.replace("https://","").split("/")[0];
+              }
+            } catch (_) { /* timed out or failed — fall through */ }
+          }
+        }
+      } catch (_) { /* IANA bootstrap failed — fall through */ }
+
+      // Step 2: Fallback — rdap.org proxy
+      if (!createdDate) {
+        setStatus("Trying fallback RDAP server…");
+        try {
+          const res = await fetchWithTimeout(`https://rdap.org/domain/${domain}`);
+          if (res.ok) {
+            const raw = await res.json();
+            ({ createdDate, registrar } = parseRdap(raw));
+            if (createdDate) source = "rdap.org (proxy)";
+          }
+        } catch (_) { /* failed */ }
+      }
+
+      setStatus("");
+      return { createdDate, registrar, source: source || "RDAP (live)" };
+    }
+
+    // Extract createdDate + registrar from any RDAP response object
+    function parseRdap(raw) {
+      let createdDate = null;
+      let registrar   = null;
+
+      const regEvent = (raw.events || []).find(e => e.eventAction === "registration");
+      if (regEvent) createdDate = new Date(regEvent.eventDate);
+
+      for (const entity of (raw.entities || [])) {
+        if (entity.roles?.includes("registrar")) {
+          registrar = entity.vcardArray?.[1]?.find(v => v[0] === "fn")?.[3]
+                   || entity.publicIds?.[0]?.identifier
+                   || "Unknown Registrar";
+          break;
+        }
+      }
+      return { createdDate, registrar };
+    }
+
+    // ── Render ────────────────────────────────────────────────────────────────
+    function renderResult(domain, { createdDate, registrar, source }) {
+      document.getElementById("loading").style.display      = "none";
+      document.getElementById("error-msg").style.display    = "none";
+      document.getElementById("main-content").style.display = "block";
+
+      document.getElementById("info-registrar").textContent = registrar || "Not available";
+      document.getElementById("info-source").textContent    = source    || "RDAP";
+
+      const regEl     = document.getElementById("info-registered");
+      const ageEl     = document.getElementById("info-age");
+      const riskEl    = document.getElementById("info-risk");
+      const banner    = document.getElementById("alert-banner");
+      const alertIcon = document.getElementById("alert-icon");
+      const alertTitle= document.getElementById("alert-title");
+      const alertBody = document.getElementById("alert-body");
+      const tips      = document.getElementById("tips-section");
+
+      if (!createdDate || isNaN(createdDate.getTime())) {
+        regEl.textContent = "Not available";
+        ageEl.textContent = "Unknown";
+        riskEl.textContent = "Unknown";
+        riskEl.className = "badge";
+        banner.className = "warn";
+        banner.style.display = "block";
+        alertIcon.textContent  = "❓";
+        alertTitle.textContent = "Domain age unavailable";
+        alertBody.textContent  = "RDAP returned no registration date for this domain. This can happen with privacy-protected or non-standard TLD registrations. Proceed with normal caution.";
+        return;
+      }
+
+      const diffDays   = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
+      const diffWeeks  = Math.floor(diffDays / 7);
+      const diffMonths = Math.floor(diffDays / 30);
+
+      regEl.textContent = createdDate.toLocaleDateString("en-US", {
+        year: "numeric", month: "long", day: "numeric"
+      });
+
+      let ageText, riskLevel, riskClass, bannerClass, icon, title, body;
+
+      if (diffDays <= 3) {
+        ageText = `${diffDays} day${diffDays !== 1 ? "s" : ""} old`;
+        riskLevel = "CRITICAL RISK"; riskClass = "badge-critical"; bannerClass = "critical"; icon = "🚨";
+        title = "Critical — Domain registered days ago";
+        body  = `This domain was created only ${diffDays} day${diffDays !== 1 ? "s" : ""} ago. This is an extremely strong indicator of a phishing attack. Do NOT engage with this email.`;
+      } else if (diffDays <= 7) {
+        ageText = `${diffDays} days old`;
+        riskLevel = "CRITICAL RISK"; riskClass = "badge-critical"; bannerClass = "critical"; icon = "🚨";
+        title = "Critical — Domain registered this week";
+        body  = `Registered just ${diffDays} days ago. Freshly created domains are heavily associated with fraud and phishing campaigns. Exercise extreme caution.`;
+      } else if (diffDays <= 30) {
+        ageText = `${diffWeeks} week${diffWeeks !== 1 ? "s" : ""} old`;
+        riskLevel = "HIGH RISK"; riskClass = "badge-danger"; bannerClass = "danger"; icon = "⛔";
+        title = "High Risk — Domain registered this month";
+        body  = `Domain is only ${diffDays} days old. Domains under 30 days are frequently used in phishing, BEC, and scam campaigns.`;
+      } else if (diffDays <= 90) {
+        ageText = `${diffMonths} month${diffMonths !== 1 ? "s" : ""} old`;
+        riskLevel = "ELEVATED RISK"; riskClass = "badge-warn"; bannerClass = "warn"; icon = "⚠️";
+        title = "Caution — Recently registered domain";
+        body  = `This domain is ${diffDays} days old. Recent registrations warrant caution — especially if you weren't expecting this email.`;
+      } else if (diffDays <= 365) {
+        ageText = `${diffMonths} months old`;
+        riskLevel = "LOW RISK"; riskClass = "badge-warn"; bannerClass = "warn"; icon = "⚠️";
+        title = "Notice — Domain under 1 year old";
+        body  = `Domain registered ${diffMonths} months ago. Most established businesses have domains older than a year.`;
+      } else {
+        const years = (diffDays / 365).toFixed(1);
+        ageText = `${years} years old`;
+        riskLevel = "SAFE"; riskClass = "badge-safe"; bannerClass = "safe"; icon = "✅";
+        title = "Domain appears established";
+        body  = `This domain has been registered for ${years} years. No domain-age based red flags detected.`;
+      }
+
+      ageEl.textContent       = ageText;
+      riskEl.textContent      = riskLevel;
+      riskEl.className        = `badge ${riskClass}`;
+      banner.className        = bannerClass;
+      banner.style.display    = "block";
+      alertIcon.textContent   = icon;
+      alertTitle.textContent  = title;
+      alertBody.textContent   = body;
+
+      if (diffDays <= 90) tips.style.display = "block";
+    }
+
+    function showError(msg) {
+      document.getElementById("loading").style.display   = "none";
+      document.getElementById("error-msg").style.display = "block";
+      document.getElementById("error-detail").textContent = msg;
+    }
+
+    function setStatus(msg) {
+      const el = document.getElementById("loading-status");
+      if (el) el.textContent = msg;
+    }
+  </script>
+</body>
+</html>
