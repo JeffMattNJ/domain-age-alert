@@ -1,35 +1,25 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<OfficeApp
-  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
   xsi:type="MailApp">
-
-  <Id>496ca05b-360a-4c88-a01b-c88de16d8f1b</Id>
+  <Id>7f3a9c2e-1b4d-4e8f-a6c0-2d5e9b3f7a1c</Id>
   <Version>1.0.0.0</Version>
   <ProviderName>Domain Age Alert</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="Domain Age Alert"/>
-  <Description DefaultValue="Alerts you when an email is from a recently registered domain - a top sign of phishing."/>
-  <IconUrl DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/icon-80.png" />
-  <HighResolutionIconUrl DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/icon-128.png" />
-  <SupportUrl DefaultValue="https://JeffMattNJ.github.io/domain-age-alert" />
-  <AppDomains>
-    <AppDomain>https://JeffMattNJ.github.io</AppDomain>
-    <AppDomain>https://rdap.org</AppDomain>
-    <AppDomain>https://data.iana.org</AppDomain>
-  </AppDomains>
-
+  <Description DefaultValue="Alerts you when a sender domain was recently registered."/>
+  <IconUrl DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/icon-80.png"/>
+  <HighResolutionIconUrl DefaultValue="https://JeffMattNJ.github.io/domain-age-alert/icon-128.png"/>
+  <SupportUrl DefaultValue="https://JeffMattNJ.github.io/domain-age-alert"/>
   <Hosts>
     <Host Name="Mailbox"/>
   </Hosts>
-
   <Requirements>
-    <Sets DefaultMinVersion="1.1">
-      <Set Name="Mailbox"/>
+    <Sets>
+      <Set Name="Mailbox" MinVersion="1.1"/>
     </Sets>
   </Requirements>
-
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
@@ -38,13 +28,10 @@
       </DesktopSettings>
     </Form>
   </FormSettings>
-
   <Permissions>ReadItem</Permissions>
-
   <Rule xsi:type="RuleCollection" Mode="Or">
     <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
   </Rule>
-
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
     <Requirements>
       <bt:Sets DefaultMinVersion="1.3">
