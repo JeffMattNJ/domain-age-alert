@@ -2,17 +2,21 @@
 <html>
 <head>
   <meta charset="UTF-8"/>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://appsforoffice.microsoft.com; connect-src https://rdap.org https://data.iana.org https://*.verisign.com https://*.registry.google;">
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <script>
     /**
      * commands.html — Background event handler
      *
-     * Runs silently when a message is opened (Exchange Online / Microsoft 365).
-     * Injects a persistent notification bar for domains under 30 days old.
+     * Automatically runs when a message is opened.
+     * Shows a badge/notification next to "Domain Age Alert" in the ribbon:
+     *   🔴 ErrorMessage  (red)    — domain under 90 days old
+     *   🟡 WarningMessage (yellow) — domain 90 days to 1 year old
+     *   No badge                  — domain over 1 year (safe)
      *
-     * Security:   HTTPS-only fetches, 5s timeout, XSS-safe textContent only
-     * Performance: localStorage cache (24h TTL) prevents repeat RDAP calls
-     * Safety:     All errors are silently swallowed — never interrupts mail flow
+     * Security:    HTTPS-only fetches, 5s timeout, XSS-safe
+     * Performance: 24h localStorage cache, known-safe domain skip list
+     * Safety:      Silent fail on all errors — never blocks mail flow
      */
 
     const CACHE_PREFIX  = 'domainAge_v1_';
@@ -20,10 +24,10 @@
     const FETCH_TIMEOUT = 5000;                  // 5 seconds
 
     Office.onReady(() => {
-      // Intentionally empty — handlers are registered by the manifest LaunchEvent
+      // Intentionally empty — handler registered via manifest LaunchEvent
     });
 
-    // ── Main handler — called by Outlook on message open ────────────────────
+    // ── Main handler — called by Outlook on message open ──────────────────────
     async function onMessageReadHandler(event) {
       try {
         const item = Office.context.mailbox.item;
@@ -32,9 +36,12 @@
         const domain = item.from.emailAddress.split("@")[1]?.toLowerCase();
         if (!domain) { event.completed(); return; }
 
-        // Skip well-known safe providers to avoid unnecessary RDAP calls
-        const knownSafe = ["gmail.com","yahoo.com","outlook.com","hotmail.com",
-                           "icloud.com","microsoft.com","apple.com","amazon.com"];
+        // Skip well-known safe providers — no RDAP call needed
+        const knownSafe = [
+          "gmail.com","yahoo.com","outlook.com","hotmail.com",
+          "icloud.com","microsoft.com","apple.com","amazon.com",
+          "google.com","live.com","msn.com","office365.com"
+        ];
         if (knownSafe.includes(domain)) { event.completed(); return; }
 
         const createdDate = await getCachedOrLookup(domain);
@@ -42,24 +49,48 @@
 
         const diffDays = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
 
-        if (diffDays <= 30) {
-          const msg = diffDays <= 3
-            ? `🚨 CRITICAL: Sender domain "${domain}" is only ${diffDays} day(s) old — very likely phishing!`
-            : diffDays <= 7
-            ? `🚨 WARNING: Sender domain "${domain}" registered ${diffDays} days ago — high phishing risk.`
-            : `⚠️ CAUTION: Sender domain "${domain}" registered ${diffDays} days ago. Verify before acting.`;
+        // ── Red badge — under 90 days ──────────────────────────────────────
+        if (diffDays <= 90) {
+          let msg;
+          if (diffDays <= 3) {
+            msg = `🚨 CRITICAL: "${domain}" is only ${diffDays} day(s) old — likely phishing!`;
+          } else if (diffDays <= 7) {
+            msg = `🚨 WARNING: "${domain}" registered ${diffDays} days ago — high phishing risk.`;
+          } else if (diffDays <= 30) {
+            msg = `🚨 HIGH RISK: "${domain}" registered ${diffDays} days ago. Verify before acting.`;
+          } else {
+            msg = `⛔ CAUTION: "${domain}" is only ${diffDays} days old. Proceed carefully.`;
+          }
 
-          // replaceAsync avoids duplicate banners if handler fires twice
           Office.context.mailbox.item.notificationMessages.replaceAsync(
             "domainAgeAlert",
             {
-              type: Office.MailboxEnums.ItemNotificationMessageType.InformationalMessage,
+              type: Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage,
               message: msg,
-              icon: "Icon.16x16",
               persistent: true
             }
           );
+
+        // ── Yellow badge — 91 days to 1 year ──────────────────────────────
+        } else if (diffDays <= 365) {
+          const months = Math.floor(diffDays / 30);
+          Office.context.mailbox.item.notificationMessages.replaceAsync(
+            "domainAgeAlert",
+            {
+              type: Office.MailboxEnums.ItemNotificationMessageType.WarningMessage,
+              message: `⚠️ NOTICE: "${domain}" is ${months} month(s) old. Most established businesses have older domains.`,
+              persistent: true
+            }
+          );
+
+        // ── No badge — over 1 year (safe) ─────────────────────────────────
+        } else {
+          // Remove any previous alert if user navigates between emails
+          Office.context.mailbox.item.notificationMessages.removeAsync(
+            "domainAgeAlert"
+          );
         }
+
       } catch (_) {
         // Silent fail — never block or delay mail reading
       }
@@ -67,9 +98,8 @@
       event.completed();
     }
 
-    // ── Cache-aware RDAP lookup ──────────────────────────────────────────────
+    // ── Cache-aware RDAP lookup ────────────────────────────────────────────────
     async function getCachedOrLookup(domain) {
-      // 1. Check localStorage cache
       try {
         const raw = localStorage.getItem(CACHE_PREFIX + domain);
         if (raw) {
@@ -81,21 +111,19 @@
         }
       } catch (_) { /* storage unavailable */ }
 
-      // 2. Live RDAP lookup
       const createdDate = await rdapLookup(domain);
 
-      // 3. Cache result (even null, to avoid hammering RDAP on unknown domains)
       try {
         localStorage.setItem(CACHE_PREFIX + domain, JSON.stringify({
           createdDate: createdDate ? createdDate.toISOString() : null,
           ts: Date.now()
         }));
-      } catch (_) { /* quota exceeded — skip */ }
+      } catch (_) { /* quota exceeded */ }
 
       return createdDate;
     }
 
-    // ── Fetch with abort timeout ─────────────────────────────────────────────
+    // ── Fetch with abort timeout ───────────────────────────────────────────────
     async function fetchTimeout(url) {
       const ctrl  = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
@@ -109,11 +137,10 @@
       }
     }
 
-    // ── RDAP lookup (primary + fallback) ─────────────────────────────────────
+    // ── RDAP lookup (primary IANA + fallback rdap.org) ────────────────────────
     async function rdapLookup(domain) {
-      // Primary: resolve correct RDAP endpoint via IANA bootstrap
       try {
-        const tld = domain.split(".").pop();
+        const tld  = domain.split(".").pop();
         const bRes = await fetchTimeout("https://data.iana.org/rdap/dns.json");
         if (bRes.ok) {
           const boot = await bRes.json();
@@ -124,7 +151,7 @@
           if (base) {
             const dRes = await fetchTimeout(`${base}domain/${domain}`);
             if (dRes.ok) {
-              const d = await dRes.json();
+              const d  = await dRes.json();
               const ev = (d.events || []).find(e => e.eventAction === "registration");
               if (ev) return new Date(ev.eventDate);
             }
@@ -132,11 +159,10 @@
         }
       } catch (_) { /* fall through */ }
 
-      // Fallback: rdap.org proxy
       try {
         const res = await fetchTimeout(`https://rdap.org/domain/${domain}`);
         if (res.ok) {
-          const d = await res.json();
+          const d  = await res.json();
           const ev = (d.events || []).find(e => e.eventAction === "registration");
           if (ev) return new Date(ev.eventDate);
         }
