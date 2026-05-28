@@ -778,7 +778,7 @@ function checkDisplayName(name, email, domain) {
     desc:`Display name "${name}" shows no brand impersonation.`, weight:0 };
 }
 
-// ── CHECK 3: Free provider impersonating business ─────────────────────────
+// ── CHECK 3: Free provider check ─────────────────────────────────────────
 function checkFreeProvider(domain, name) {
   if (!FREE_PROVIDERS.includes(domain)) {
     return { name:"Email Provider", icon:"✅", status:"pass", badge:"BUSINESS DOMAIN",
@@ -788,11 +788,13 @@ function checkFreeProvider(domain, name) {
                            "team","noreply","no-reply","info","account","alert","bank"];
   const looksOfficial = corporateTerms.some(t => name.toLowerCase().includes(t));
   if (looksOfficial) {
+    // Free provider + official-sounding name = higher risk
     return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE PROVIDER",
       desc:`Appears official but sent from free provider ${domain}. Legitimate businesses use their own domains.`, weight:15 };
   }
-  return { name:"Email Provider", icon:"✅", status:"pass", badge:"PERSONAL EMAIL",
-    desc:`Sent from ${domain} — normal for personal email.`, weight:0 };
+  // Always yellow for free providers — user should know even for personal emails
+  return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE EMAIL",
+    desc:`Sent from ${domain} — a free consumer email provider. Verify this is someone you know before acting on the email.`, weight:5 };
 }
 
 // ── CHECK 4: Reply-to mismatch ────────────────────────────────────────────
