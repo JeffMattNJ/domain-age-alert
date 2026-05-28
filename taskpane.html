@@ -1,165 +1,117 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Domain Age Alert</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://appsforoffice.microsoft.com; style-src 'self' 'unsafe-inline'; connect-src https://rdap.org https://data.iana.org https://*.verisign.com https://*.registry.google; img-src 'self' data:; frame-ancestors https://outlook.office.com https://outlook.office365.com https://*.outlook.com;">
+  <title>Is This Safe?</title>
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <style>
     :root {
-      --bg: #0f1117;
-      --surface: #1a1d27;
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
       --surface2: #222535;
-      --border: #2e3248;
-      --text: #e8eaf0;
-      --muted: #7b82a0;
-      --safe: #22c55e;
-      --warn: #f59e0b;
-      --danger: #ef4444;
+      --border:   #2e3248;
+      --text:     #e8eaf0;
+      --muted:    #7b82a0;
+      --safe:     #22c55e;
+      --warn:     #f59e0b;
+      --danger:   #ef4444;
       --critical: #ff2d55;
-      --accent: #6366f1;
+      --accent:   #6366f1;
       --font: 'Segoe UI', system-ui, sans-serif;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; padding: 14px; }
 
-    body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      padding: 16px;
-    }
-
-    header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 18px;
-      padding-bottom: 14px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .shield-icon {
-      width: 32px; height: 32px;
-      background: var(--accent);
-      border-radius: 8px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px;
-      flex-shrink: 0;
-    }
-
-    header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+    /* ── Header ── */
+    header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .shield { width: 34px; height: 34px; background: var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+    header h1 { font-size: 14px; font-weight: 600; }
     header p  { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
-    #alert-banner {
-      border-radius: 10px;
-      padding: 14px 16px;
-      margin-bottom: 16px;
-      display: none;
-      border: 1px solid transparent;
+    /* ── Verdict banner ── */
+    #verdict-banner {
+      border-radius: 12px; padding: 16px; margin-bottom: 14px;
+      display: none; border: 1px solid transparent;
       animation: slideIn 0.3s ease;
     }
+    @keyframes slideIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
+    #verdict-banner.safe     { background: rgba(34,197,94,0.1);   border-color: var(--safe); }
+    #verdict-banner.warn     { background: rgba(245,158,11,0.12); border-color: var(--warn); }
+    #verdict-banner.danger   { background: rgba(239,68,68,0.12);  border-color: var(--danger); }
+    #verdict-banner.critical { background: rgba(255,45,85,0.12);  border-color: var(--critical); }
+    .verdict-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .verdict-emoji { font-size: 28px; }
+    .verdict-title { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+    .verdict-sub   { font-size: 12px; color: var(--muted); line-height: 1.5; }
 
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateY(-6px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    #alert-banner.critical { background: rgba(255,45,85,0.12);  border-color: var(--critical); }
-    #alert-banner.danger   { background: rgba(239,68,68,0.12);  border-color: var(--danger); }
-    #alert-banner.warn     { background: rgba(245,158,11,0.12); border-color: var(--warn); }
-    #alert-banner.safe     { background: rgba(34,197,94,0.1);   border-color: var(--safe); }
-
-    .alert-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-    .alert-icon   { font-size: 20px; }
-    .alert-title  { font-size: 13px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
-    .alert-body   { font-size: 12px; color: var(--muted); line-height: 1.5; }
-
-    .info-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 14px 16px;
-      margin-bottom: 12px;
-    }
-
-    .info-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 6px 0;
-      border-bottom: 1px solid var(--border);
+    /* ── Alert line ── */
+    #alert-line {
+      display: none;
+      border-radius: 7px;
+      padding: 9px 13px;
+      margin-bottom: 10px;
       font-size: 12px;
+      font-weight: 600;
+      line-height: 1.5;
+      letter-spacing: 0.01em;
+      animation: slideIn 0.3s ease;
     }
-    .info-row:last-child { border-bottom: none; }
-    .info-label { color: var(--muted); }
-    .info-value { font-weight: 600; text-align: right; max-width: 60%; word-break: break-all; }
+    #alert-line.critical { background: rgba(255,45,85,0.15);  border: 1px solid var(--critical); color: #ff6b80; }
+    #alert-line.danger   { background: rgba(239,68,68,0.15);  border: 1px solid var(--danger);   color: #ff8a8a; }
+    #alert-line.warn     { background: rgba(245,158,11,0.15); border: 1px solid var(--warn);     color: #fbbf47; }
+    #alert-line.safe     { background: rgba(34,197,94,0.1);   border: 1px solid var(--safe);     color: #4ade80; }
+    .alert-prefix { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.8; display: block; margin-bottom: 2px; }
+    .alert-reason { display: block; }
 
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; }
-    .badge-critical { background: rgba(255,45,85,0.2);  color: var(--critical); }
-    .badge-danger   { background: rgba(239,68,68,0.2);  color: var(--danger); }
-    .badge-warn     { background: rgba(245,158,11,0.2); color: var(--warn); }
-    .badge-safe     { background: rgba(34,197,94,0.15); color: var(--safe); }
+        /* ── Score bar ── */
+    .score-bar-wrap { margin: 10px 0 14px; }
+    .score-bar-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+    .score-bar-track { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+    .score-bar-fill  { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
 
-    /* Cache indicator */
-    .cache-badge {
-      display: inline-block;
-      font-size: 10px;
-      color: var(--muted);
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 1px 5px;
-      margin-left: 6px;
-      vertical-align: middle;
+    /* ── Check cards ── */
+    .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+    .check-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px; margin-bottom: 6px;
+      display: flex; gap: 10px; align-items: flex-start;
     }
+    .check-card.pass   { border-left: 3px solid var(--safe); }
+    .check-card.warn   { border-left: 3px solid var(--warn); }
+    .check-card.fail   { border-left: 3px solid var(--danger); }
+    .check-card.info   { border-left: 3px solid var(--accent); }
+    .check-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+    .check-body { flex: 1; min-width: 0; }
+    .check-name { font-size: 12px; font-weight: 600; color: var(--text); }
+    .check-desc { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+    .check-badge {
+      font-size: 10px; font-weight: 700; padding: 2px 7px;
+      border-radius: 20px; white-space: nowrap; flex-shrink: 0;
+    }
+    .badge-pass { background: rgba(34,197,94,0.15);   color: var(--safe); }
+    .badge-warn { background: rgba(245,158,11,0.15);  color: var(--warn); }
+    .badge-fail { background: rgba(239,68,68,0.15);   color: var(--danger); }
+    .badge-info { background: rgba(99,102,241,0.15);  color: var(--accent); }
 
-    .tips-section { margin-top: 14px; }
-    .tips-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
-    .tip { display: flex; gap: 8px; font-size: 11px; color: var(--muted); margin-bottom: 6px; line-height: 1.5; }
-    .tip-dot { width: 5px; height: 5px; background: var(--accent); border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+    /* ── Email summary card ── */
+    .email-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+    .email-row  { display: flex; justify-content: space-between; font-size: 11px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .email-row:last-child { border-bottom: none; }
+    .email-key  { color: var(--muted); flex-shrink: 0; }
+    .email-val  { font-weight: 600; text-align: right; word-break: break-all; max-width: 65%; }
 
+    /* ── Loading ── */
     #loading { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 12px; }
-    .spinner {
-      width: 28px; height: 28px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin: 0 auto 12px;
-    }
+    .spinner { width: 28px; height: 28px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
     @keyframes spin { to { transform: rotate(360deg); } }
-
     #loading-status { font-size: 11px; color: var(--muted); margin-top: 6px; min-height: 16px; }
 
-    #error-msg {
-      display: none;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px;
-      text-align: center;
-      font-size: 12px;
-      color: var(--muted);
-    }
-
     #main-content { display: none; }
+    #error-msg { display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; font-size: 12px; color: var(--muted); }
 
-    .refresh-btn {
-      display: block;
-      width: 100%;
-      margin-top: 12px;
-      padding: 8px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--muted);
-      font-size: 11px;
-      cursor: pointer;
-      font-family: var(--font);
-      transition: border-color 0.15s;
-    }
+    .refresh-btn { display: block; width: 100%; margin-top: 12px; padding: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 11px; cursor: pointer; font-family: var(--font); transition: border-color 0.15s; }
     .refresh-btn:hover { border-color: var(--accent); color: var(--text); }
 
     footer { margin-top: 16px; text-align: center; font-size: 10px; color: var(--border); }
@@ -167,349 +119,546 @@
 </head>
 <body>
 
-  <header>
-    <div class="shield-icon">🛡️</div>
-    <div>
-      <h1>Domain Age Alert</h1>
-      <p>Phishing &amp; scam domain detector</p>
-    </div>
-  </header>
+<header>
+  <div class="shield">🛡️</div>
+  <div>
+    <h1>Is This Safe?</h1>
+    <p>Multi-factor email safety checker</p>
+  </div>
+</header>
 
-  <div id="loading">
-    <div class="spinner"></div>
-    Checking sender domain…
-    <div id="loading-status"></div>
+<div id="loading">
+  <div class="spinner"></div>
+  Analyzing email safety…
+  <div id="loading-status"></div>
+</div>
+
+<div id="error-msg">
+  <div style="font-size:24px;margin-bottom:8px;">⚠️</div>
+  Could not analyze this email.<br>
+  <span id="error-detail"></span>
+  <button class="refresh-btn" onclick="location.reload()">↺ Retry</button>
+</div>
+
+<div id="main-content">
+
+  <!-- Verdict banner -->
+  <div id="verdict-banner">
+    <div class="verdict-top">
+      <span class="verdict-emoji" id="verdict-emoji"></span>
+      <span class="verdict-title" id="verdict-title"></span>
+    </div>
+    <div class="verdict-sub" id="verdict-sub"></div>
+    <div class="score-bar-wrap">
+      <div class="score-bar-label">
+        <span>Safety Score</span>
+        <span id="score-label"></span>
+      </div>
+      <div class="score-bar-track">
+        <div class="score-bar-fill" id="score-bar"></div>
+      </div>
+    </div>
   </div>
 
-  <div id="error-msg">
-    <div style="font-size:24px;margin-bottom:8px;">⚠️</div>
-    Could not retrieve domain information.<br>
-    <span id="error-detail"></span>
-    <button class="refresh-btn" onclick="retryLookup()">↺ Retry</button>
+
+  <!-- Alert line -->
+  <div id="alert-line">
+    <span class="alert-prefix" id="alert-prefix">⚠ Alert</span>
+    <span class="alert-reason" id="alert-reason"></span>
   </div>
 
-  <div id="main-content">
-    <div id="alert-banner">
-      <div class="alert-header">
-        <span class="alert-icon" id="alert-icon"></span>
-        <span class="alert-title" id="alert-title"></span>
-      </div>
-      <div class="alert-body" id="alert-body"></div>
-    </div>
-
-    <div class="info-card">
-      <div class="info-row">
-        <span class="info-label">Sender</span>
-        <span class="info-value" id="info-sender">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Domain</span>
-        <span class="info-value" id="info-domain">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Registered</span>
-        <span class="info-value" id="info-registered">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Domain Age</span>
-        <span class="info-value" id="info-age">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Registrar</span>
-        <span class="info-value" id="info-registrar">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Risk Level</span>
-        <span class="info-value"><span class="badge" id="info-risk">—</span></span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Data Source</span>
-        <span class="info-value" id="info-source">—</span>
-      </div>
-    </div>
-
-    <div class="tips-section" id="tips-section" style="display:none;">
-      <div class="tips-title">⚡ What to watch for</div>
-      <div class="tip"><div class="tip-dot"></div>Do not click links or download attachments from this email.</div>
-      <div class="tip"><div class="tip-dot"></div>Verify the sender through a separate, known channel before responding.</div>
-      <div class="tip"><div class="tip-dot"></div>Newly registered domains are a top indicator of phishing campaigns.</div>
-      <div class="tip"><div class="tip-dot"></div>Report this email as phishing if it requests personal or financial information.</div>
-    </div>
-
-    <button class="refresh-btn" onclick="retryLookup(true)">↺ Refresh (bypass cache)</button>
+  <!-- Email summary -->
+  <div class="section-title">Email Details</div>
+  <div class="email-card">
+    <div class="email-row"><span class="email-key">From</span><span class="email-val" id="info-from">—</span></div>
+    <div class="email-row"><span class="email-key">Address</span><span class="email-val" id="info-email">—</span></div>
+    <div class="email-row"><span class="email-key">Domain</span><span class="email-val" id="info-domain">—</span></div>
+    <div class="email-row"><span class="email-key">Subject</span><span class="email-val" id="info-subject">—</span></div>
+    <div class="email-row"><span class="email-key">Reply-To</span><span class="email-val" id="info-replyto">—</span></div>
   </div>
 
-  <footer>Domain Age Alert · for Microsoft Outlook</footer>
+  <!-- Check results -->
+  <div class="section-title">Safety Checks</div>
+  <div id="checks-container"></div>
 
-  <script>
-    // ── Config ───────────────────────────────────────────────────────────────
-    const CACHE_TTL_MS   = 24 * 60 * 60 * 1000; // 24 hours
-    const FETCH_TIMEOUT  = 5000;                  // 5 seconds per request
-    const CACHE_PREFIX   = 'domainAge_v1_';
+  <button class="refresh-btn" onclick="location.reload()">↺ Re-analyze</button>
+</div>
 
-    let currentDomain = null;
-    let currentEmail  = null;
+<footer>Is This Safe? · Domain Age Alert · for Microsoft Outlook</footer>
 
-    // ── Entry point ──────────────────────────────────────────────────────────
-    Office.onReady(async () => {
-      try {
-        const item = Office.context.mailbox.item;
-        const from = item.from;
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const CACHE_PREFIX  = 'domainAge_v1_';
+const CACHE_TTL_MS  = 24 * 60 * 60 * 1000;
+const FETCH_TIMEOUT = 5000;
 
-        if (!from || !from.emailAddress) { showError("Could not read sender address."); return; }
+// Suspicious keywords commonly found in phishing emails
+const PHISH_KEYWORDS = [
+  'verify your account','confirm your identity','unusual activity',
+  'suspended','click immediately','update your payment','wire transfer',
+  'act now','urgent action required','your account has been',
+  'limited time','validate your','sign in to restore',
+  'security alert','unauthorized access','click here to verify',
+  'reactivate your account','won a prize','claim your reward'
+];
 
-        currentEmail  = from.emailAddress;
-        currentDomain = currentEmail.split("@")[1]?.toLowerCase();
+// Free email providers that shouldn't be used for business
+const FREE_PROVIDERS = [
+  'gmail.com','yahoo.com','hotmail.com','outlook.com',
+  'aol.com','icloud.com','protonmail.com','mail.com',
+  'yandex.com','gmx.com','live.com'
+];
 
-        if (!currentDomain) { showError("Could not parse sender domain."); return; }
+// ── Entry point ───────────────────────────────────────────────────────────────
+Office.onReady(async () => {
+  try {
+    const item = Office.context.mailbox.item;
+    if (!item) { showError("Could not access email data."); return; }
 
-        const displayName = from.displayName;
-        document.getElementById("info-sender").textContent =
-          displayName ? `${displayName} <${currentEmail}>` : currentEmail;
-        document.getElementById("info-domain").textContent = currentDomain;
+    // Gather all available email data
+    setStatus("Reading email headers…");
 
-        await runLookup(currentDomain, false);
-      } catch (err) {
-        showError(err.message || "Unknown error");
+    const from       = item.from;
+    const subject    = item.subject || "";
+    const replyTo    = item.replyTo || [];
+
+    if (!from?.emailAddress) { showError("Could not read sender information."); return; }
+
+    const senderEmail   = from.emailAddress.toLowerCase();
+    const senderName    = from.displayName || "";
+    const senderDomain  = senderEmail.split("@")[1] || "";
+    const replyToEmail  = replyTo.length > 0 ? replyTo[0].emailAddress?.toLowerCase() : null;
+    const replyToDomain = replyToEmail ? replyTo[0].emailAddress.split("@")[1]?.toLowerCase() : null;
+
+    // Populate email summary
+    document.getElementById("info-from").textContent    = senderName || "—";
+    document.getElementById("info-email").textContent   = senderEmail;
+    document.getElementById("info-domain").textContent  = senderDomain;
+    document.getElementById("info-subject").textContent = subject.length > 50 ? subject.substring(0,50) + "…" : subject || "—";
+    document.getElementById("info-replyto").textContent = replyToEmail || "Same as sender";
+
+    // ── Run all checks ────────────────────────────────────────────────────────
+    const results = [];
+
+    // CHECK 1: Domain age (RDAP lookup)
+    setStatus("Checking domain age…");
+    const domainAge = await checkDomainAge(senderDomain);
+    results.push(domainAge);
+
+    // CHECK 2: Display name vs email domain mismatch
+    setStatus("Checking sender identity…");
+    results.push(checkDisplayNameMismatch(senderName, senderEmail, senderDomain));
+
+    // CHECK 3: Free email provider used for business
+    setStatus("Checking email provider…");
+    results.push(checkFreeProvider(senderDomain, senderName));
+
+    // CHECK 4: Reply-To mismatch
+    setStatus("Checking reply-to address…");
+    results.push(checkReplyToMismatch(senderEmail, replyToEmail, replyToDomain));
+
+    // CHECK 5: Suspicious keywords in subject
+    setStatus("Analyzing subject line…");
+    results.push(checkSubjectKeywords(subject));
+
+    // CHECK 6: Lookalike domain detection
+    setStatus("Checking for spoofed domains…");
+    results.push(checkLookalikeDomain(senderDomain));
+
+    // ── Calculate overall score ───────────────────────────────────────────────
+    renderResults(results, senderDomain);
+
+  } catch (err) {
+    showError(err.message || "Unexpected error");
+  }
+});
+
+// ── CHECK 1: Domain Age ───────────────────────────────────────────────────────
+async function checkDomainAge(domain) {
+  const knownSafe = ["gmail.com","yahoo.com","outlook.com","hotmail.com",
+                     "icloud.com","microsoft.com","apple.com","amazon.com",
+                     "google.com","live.com","office365.com"];
+
+  if (knownSafe.includes(domain)) {
+    return { name: "Domain Age", icon: "✅", status: "pass", badge: "ESTABLISHED",
+             desc: `${domain} is a well-known established provider.` };
+  }
+
+  try {
+    const cached = getCache(domain);
+    let createdDate = cached ? new Date(cached.createdDate) : null;
+
+    if (!createdDate) {
+      const result = await rdapLookup(domain);
+      createdDate = result;
+      if (createdDate) setCache(domain, { createdDate: createdDate.toISOString(), ts: Date.now() });
+    }
+
+    if (!createdDate) {
+      return { name: "Domain Age", icon: "❓", status: "info", badge: "UNKNOWN",
+               desc: "Could not retrieve registration date — privacy-protected or unusual TLD." };
+    }
+
+    const diffDays   = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
+    const diffMonths = Math.floor(diffDays / 30);
+    const diffYears  = (diffDays / 365).toFixed(1);
+    const regDate    = createdDate.toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+
+    if (diffDays <= 7)   return { name:"Domain Age", icon:"🚨", status:"fail", badge:"CRITICAL",
+      desc:`Registered only ${diffDays} day(s) ago (${regDate}). Extremely high phishing risk.`, weight: 40 };
+    if (diffDays <= 30)  return { name:"Domain Age", icon:"⛔", status:"fail", badge:"HIGH RISK",
+      desc:`Registered ${diffDays} days ago (${regDate}). Very recently created domain.`, weight: 35 };
+    if (diffDays <= 90)  return { name:"Domain Age", icon:"⚠️", status:"warn", badge:"ELEVATED",
+      desc:`Registered ${diffMonths} month(s) ago (${regDate}). Recently created domain.`, weight: 20 };
+    if (diffDays <= 365) return { name:"Domain Age", icon:"⚠️", status:"warn", badge:"NOTICE",
+      desc:`Domain is ${diffMonths} months old (registered ${regDate}).`, weight: 10 };
+    return { name:"Domain Age", icon:"✅", status:"pass", badge:"ESTABLISHED",
+      desc:`Domain registered ${diffYears} years ago (${regDate}). No age-based red flags.`, weight: 0 };
+
+  } catch (_) {
+    return { name:"Domain Age", icon:"❓", status:"info", badge:"UNKNOWN",
+             desc:"Could not check domain age — network timeout or unavailable." };
+  }
+}
+
+// ── CHECK 2: Display name vs email mismatch ───────────────────────────────────
+function checkDisplayNameMismatch(name, email, domain) {
+  if (!name) return { name:"Sender Identity", icon:"✅", status:"pass", badge:"OK",
+    desc:"No display name — sender address shown directly." };
+
+  const nameLower = name.toLowerCase();
+
+  // Check if name contains a well-known brand but domain doesn't match
+  const brands = [
+    { brand:"microsoft",  domains:["microsoft.com","outlook.com","office.com","live.com"] },
+    { brand:"apple",      domains:["apple.com","icloud.com"] },
+    { brand:"amazon",     domains:["amazon.com","amazonaws.com"] },
+    { brand:"google",     domains:["google.com","gmail.com"] },
+    { brand:"paypal",     domains:["paypal.com"] },
+    { brand:"netflix",    domains:["netflix.com"] },
+    { brand:"facebook",   domains:["facebook.com","meta.com"] },
+    { brand:"chase",      domains:["chase.com","jpmchase.com"] },
+    { brand:"bank of america", domains:["bankofamerica.com"] },
+    { brand:"wells fargo",     domains:["wellsfargo.com"] },
+    { brand:"irs",        domains:["irs.gov"] },
+    { brand:"fedex",      domains:["fedex.com"] },
+    { brand:"ups",        domains:["ups.com"] },
+    { brand:"usps",       domains:["usps.com"] },
+  ];
+
+  for (const { brand, domains } of brands) {
+    if (nameLower.includes(brand)) {
+      const domainMatch = domains.some(d => domain === d || domain.endsWith("." + d));
+      if (!domainMatch) {
+        return { name:"Sender Identity", icon:"🚨", status:"fail", badge:"SPOOFED NAME",
+          desc:`Display name contains "${brand}" but email is from ${domain}. This is a common impersonation tactic.`, weight: 35 };
       }
+    }
+  }
+
+  // Check if display name contains an email address different from the actual sender
+  const emailInName = nameLower.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/);
+  if (emailInName && emailInName[0] !== email) {
+    return { name:"Sender Identity", icon:"⚠️", status:"warn", badge:"NAME MISMATCH",
+      desc:`Display name contains a different email address than the actual sender. This can be used to deceive.`, weight: 20 };
+  }
+
+  return { name:"Sender Identity", icon:"✅", status:"pass", badge:"OK",
+    desc:`Display name "${name}" doesn't contain obvious brand impersonation.`, weight: 0 };
+}
+
+// ── CHECK 3: Free provider impersonating business ─────────────────────────────
+function checkFreeProvider(domain, senderName) {
+  const isFree = FREE_PROVIDERS.includes(domain);
+  if (!isFree) return { name:"Email Provider", icon:"✅", status:"pass", badge:"BUSINESS",
+    desc:`${domain} appears to be a dedicated business domain.`, weight: 0 };
+
+  // Free provider is normal for personal emails — only flag if name looks corporate
+  const corporateTerms = ["support","help","admin","billing","service","security",
+                           "team","noreply","no-reply","info","account","alert"];
+  const nameLower = senderName.toLowerCase();
+  const emailLocal = domain;
+
+  const looksOfficial = corporateTerms.some(t => nameLower.includes(t));
+
+  if (looksOfficial) {
+    return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE PROVIDER",
+      desc:`This appears to be an official communication but is sent from a free email provider (${domain}). Legitimate companies use their own domains.`, weight: 15 };
+  }
+
+  return { name:"Email Provider", icon:"✅", status:"pass", badge:"PERSONAL",
+    desc:`Sent from ${domain} — expected for personal emails.`, weight: 0 };
+}
+
+// ── CHECK 4: Reply-To mismatch ────────────────────────────────────────────────
+function checkReplyToMismatch(senderEmail, replyToEmail, replyToDomain) {
+  if (!replyToEmail || replyToEmail === senderEmail) {
+    return { name:"Reply-To Address", icon:"✅", status:"pass", badge:"MATCHES",
+      desc:"Reply-to address matches the sender — no redirection detected." };
+  }
+
+  const senderDomain  = senderEmail.split("@")[1];
+
+  if (replyToDomain !== senderDomain) {
+    return { name:"Reply-To Address", icon:"🚨", status:"fail", badge:"MISMATCH",
+      desc:`Replies will go to ${replyToEmail} instead of the sender's domain. This is a classic phishing technique to intercept your response.`, weight: 30 };
+  }
+
+  return { name:"Reply-To Address", icon:"⚠️", status:"warn", badge:"DIFFERENT",
+    desc:`Reply-to (${replyToEmail}) differs from sender but uses the same domain.`, weight: 5 };
+}
+
+// ── CHECK 5: Suspicious subject keywords ─────────────────────────────────────
+function checkSubjectKeywords(subject) {
+  if (!subject) return { name:"Subject Analysis", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No subject line to analyze." };
+
+  const subLower = subject.toLowerCase();
+  const found = PHISH_KEYWORDS.filter(k => subLower.includes(k));
+
+  if (found.length >= 2) {
+    return { name:"Subject Analysis", icon:"⚠️", status:"warn", badge:"SUSPICIOUS",
+      desc:`Subject contains ${found.length} phishing indicators: "${found.slice(0,2).join('", "')}"`, weight: 15 };
+  }
+  if (found.length === 1) {
+    return { name:"Subject Analysis", icon:"⚠️", status:"warn", badge:"CAUTION",
+      desc:`Subject contains a common phishing phrase: "${found[0]}"`, weight: 8 };
+  }
+
+  return { name:"Subject Analysis", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No suspicious phrases detected in the subject line." };
+}
+
+// ── CHECK 6: Lookalike/typosquat domain ──────────────────────────────────────
+function checkLookalikeDomain(domain) {
+  const lookalikes = [
+    { real:"paypal.com",    patterns:["paypa1","paypai","paypal-","paypalservice"] },
+    { real:"microsoft.com", patterns:["micros0ft","microsofft","microsoft-","rnicrosof"] },
+    { real:"apple.com",     patterns:["apple-","appie","appi","apple-id"] },
+    { real:"amazon.com",    patterns:["arnazon","amaz0n","amazon-","amazonservice"] },
+    { real:"google.com",    patterns:["go0gle","googie","google-","googlesupport"] },
+    { real:"netflix.com",   patterns:["netfIix","netfix","netflix-"] },
+    { real:"chase.com",     patterns:["chase-","chas3","chasebank"] },
+    { real:"irs.gov",       patterns:["irs-","irs.com","irsrefund"] },
+    { real:"fedex.com",     patterns:["fedex-","fedexp","fe-dex"] },
+  ];
+
+  for (const { real, patterns } of lookalikes) {
+    for (const pattern of patterns) {
+      if (domain.includes(pattern)) {
+        return { name:"Domain Spoofing", icon:"🚨", status:"fail", badge:"LOOKALIKE",
+          desc:`"${domain}" appears to be impersonating ${real}. This is a typosquatting attack.`, weight: 40 };
+      }
+    }
+  }
+
+  // Check for excessive hyphens or numbers (common in phishing domains)
+  const hyphenCount = (domain.match(/-/g) || []).length;
+  const tld = domain.split(".").pop();
+  const suspiciousTlds = ["xyz","top","click","loan","work","gq","tk","ml","ga","cf"];
+
+  if (hyphenCount >= 3) {
+    return { name:"Domain Spoofing", icon:"⚠️", status:"warn", badge:"SUSPICIOUS",
+      desc:`Domain "${domain}" has an unusual number of hyphens — common in phishing domains.`, weight: 15 };
+  }
+
+  if (suspiciousTlds.includes(tld)) {
+    return { name:"Domain Spoofing", icon:"⚠️", status:"warn", badge:"RISKY TLD",
+      desc:`".${tld}" domains are frequently used in phishing campaigns.`, weight: 12 };
+  }
+
+  return { name:"Domain Spoofing", icon:"✅", status:"pass", badge:"LOOKS CLEAN",
+    desc:"No lookalike or typosquat patterns detected in the domain." };
+}
+
+// ── Render results ────────────────────────────────────────────────────────────
+function renderResults(results, domain) {
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("main-content").style.display = "block";
+
+  // Calculate total risk score (0-100, higher = more risky)
+  const totalWeight = results.reduce((sum, r) => sum + (r.weight || 0), 0);
+  const riskScore   = Math.min(100, totalWeight);
+  const safeScore   = Math.max(0, 100 - riskScore);
+
+  // Determine overall verdict
+  let verdict, emoji, sub, bannerClass, barColor;
+
+  const failCount = results.filter(r => r.status === "fail").length;
+  const warnCount = results.filter(r => r.status === "warn").length;
+
+  if (riskScore >= 60 || failCount >= 2) {
+    verdict = "LIKELY PHISHING"; emoji = "🚨"; bannerClass = "critical"; barColor = "#ff2d55";
+    sub = "Multiple red flags detected. Do not click links, download attachments, or reply. Report this email.";
+  } else if (riskScore >= 35 || failCount >= 1) {
+    verdict = "SUSPICIOUS EMAIL"; emoji = "⛔"; bannerClass = "danger"; barColor = "#ef4444";
+    sub = "Significant concerns detected. Verify the sender through a separate channel before taking any action.";
+  } else if (riskScore >= 15 || warnCount >= 2) {
+    verdict = "PROCEED WITH CAUTION"; emoji = "⚠️"; bannerClass = "warn"; barColor = "#f59e0b";
+    sub = "Some concerns flagged. Review the details below before responding or clicking any links.";
+  } else if (riskScore >= 5 || warnCount >= 1) {
+    verdict = "MOSTLY LOOKS SAFE"; emoji = "🟡"; bannerClass = "warn"; barColor = "#f59e0b";
+    sub = "Minor concerns noted but nothing critical. Use normal judgment before responding.";
+  } else {
+    verdict = "LOOKS LEGITIMATE"; emoji = "✅"; bannerClass = "safe"; barColor = "#22c55e";
+    sub = "No red flags detected. This email passes all safety checks.";
+  }
+
+  // Render banner
+  const banner = document.getElementById("verdict-banner");
+  banner.className = bannerClass;
+  banner.style.display = "block";
+  document.getElementById("verdict-emoji").textContent  = emoji;
+  document.getElementById("verdict-title").textContent  = verdict;
+  document.getElementById("verdict-sub").textContent    = sub;
+  document.getElementById("score-label").textContent    = `${safeScore}/100`;
+  const bar = document.getElementById("score-bar");
+  bar.style.width      = `${safeScore}%`;
+  bar.style.background = barColor;
+
+  // ── Render alert line ────────────────────────────────────────────────────
+  const alertLine   = document.getElementById("alert-line");
+  const alertPrefix = document.getElementById("alert-prefix");
+  const alertReason = document.getElementById("alert-reason");
+
+  // Build a plain-English reason from the top failures/warnings
+  const topIssues = sorted_preview // placeholder
+
+  const failChecks = results.filter(r => r.status === "fail");
+  const warnChecks = results.filter(r => r.status === "warn");
+  const allIssues  = [...failChecks, ...warnChecks];
+
+  if (allIssues.length > 0 && bannerClass !== "safe") {
+    // Build concise reason from top 2 issues
+    const reasons = allIssues.slice(0, 2).map(r => {
+      // Trim the desc to a short phrase
+      const desc = r.desc.length > 80 ? r.desc.substring(0, 80) + "…" : r.desc;
+      return `${r.name}: ${desc}`;
     });
 
-    async function retryLookup(bypassCache = false) {
-      if (!currentDomain) return;
-      document.getElementById("main-content").style.display = "none";
-      document.getElementById("error-msg").style.display    = "none";
-      document.getElementById("loading").style.display      = "block";
-      document.getElementById("loading-status").textContent = "";
-      await runLookup(currentDomain, bypassCache);
-    }
+    const prefixMap = {
+      critical: "🚨 ALERT —",
+      danger:   "⛔ ALERT —",
+      warn:     "⚠️ CAUTION —",
+    };
 
-    async function runLookup(domain, bypassCache) {
-      // ── 1. Check cache first ──────────────────────────────────────────────
-      if (!bypassCache) {
-        const cached = getCache(domain);
-        if (cached) {
-          setStatus("Loaded from cache");
-          renderResult(domain, {
-            createdDate: cached.createdDate ? new Date(cached.createdDate) : null,
-            registrar:   cached.registrar,
-            source:      "Cache (< 24h old)"
-          });
-          return;
+    alertLine.className   = bannerClass;
+    alertLine.style.display = "block";
+    alertPrefix.textContent = prefixMap[bannerClass] || "⚠️ ALERT —";
+    alertReason.textContent = reasons.join(" · ");
+  } else if (bannerClass === "safe") {
+    alertLine.className     = "safe";
+    alertLine.style.display = "block";
+    alertPrefix.textContent = "✅ CLEAR —";
+    alertReason.textContent = "No red flags detected. This email passes all safety checks.";
+  }
+
+  // Render check cards
+  const container = document.getElementById("checks-container");
+  container.innerHTML = "";
+
+  // Sort: failures first, then warnings, then passes
+  const sorted = [...results].sort((a,b) => {
+    const order = { fail:0, warn:1, info:2, pass:3 };
+    return (order[a.status]||3) - (order[b.status]||3);
+  });
+
+  for (const check of sorted) {
+    const iconMap  = { pass:"✅", warn:"⚠️", fail:"🚨", info:"❓" };
+    const badgeMap = { pass:"badge-pass", warn:"badge-warn", fail:"badge-fail", info:"badge-info" };
+
+    const card = document.createElement("div");
+    card.className = `check-card ${check.status}`;
+    card.innerHTML = `
+      <span class="check-icon">${check.icon || iconMap[check.status]}</span>
+      <div class="check-body">
+        <div class="check-name">${escapeHtml(check.name)}</div>
+        <div class="check-desc">${escapeHtml(check.desc)}</div>
+      </div>
+      <span class="check-badge ${badgeMap[check.status]}">${escapeHtml(check.badge)}</span>
+    `;
+    container.appendChild(card);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str || "";
+  return d.innerHTML;
+}
+
+function setStatus(msg) {
+  const el = document.getElementById("loading-status");
+  if (el) el.textContent = msg;
+}
+
+function showError(msg) {
+  document.getElementById("loading").style.display   = "none";
+  document.getElementById("error-msg").style.display = "block";
+  document.getElementById("error-detail").textContent = msg;
+}
+
+function getCache(domain) {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + domain);
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    if (Date.now() - entry.ts > CACHE_TTL_MS || !entry.createdDate) {
+      localStorage.removeItem(CACHE_PREFIX + domain);
+      return null;
+    }
+    return entry;
+  } catch (_) { return null; }
+}
+
+function setCache(domain, data) {
+  try { localStorage.setItem(CACHE_PREFIX + domain, JSON.stringify(data)); }
+  catch (_) {}
+}
+
+async function fetchWithTimeout(url) {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    return res;
+  } catch (e) { clearTimeout(timer); throw e; }
+}
+
+async function rdapLookup(domain) {
+  try {
+    const tld  = domain.split(".").pop();
+    const bRes = await fetchWithTimeout("https://data.iana.org/rdap/dns.json");
+    if (bRes.ok) {
+      const boot = await bRes.json();
+      let base = null;
+      for (const [tlds, urls] of (boot.services || [])) {
+        if (tlds.includes(tld) && urls.length > 0) { base = urls[0]; break; }
+      }
+      if (base) {
+        const dRes = await fetchWithTimeout(`${base}domain/${domain}`);
+        if (dRes.ok) {
+          const d  = await dRes.json();
+          const ev = (d.events || []).find(e => e.eventAction === "registration");
+          if (ev) return new Date(ev.eventDate);
         }
       }
-
-      // ── 2. Live RDAP lookup ───────────────────────────────────────────────
-      const result = await lookupDomain(domain);
-
-      // ── 3. Store in cache ─────────────────────────────────────────────────
-      if (result.createdDate) {
-        setCache(domain, {
-          createdDate: result.createdDate.toISOString(),
-          registrar:   result.registrar,
-          ts:          Date.now()
-        });
-      }
-
-      renderResult(domain, result);
     }
+  } catch (_) {}
 
-    // ── Cache helpers ─────────────────────────────────────────────────────────
-    function getCache(domain) {
-      try {
-        const raw = localStorage.getItem(CACHE_PREFIX + domain);
-        if (!raw) return null;
-        const entry = JSON.parse(raw);
-        if (Date.now() - entry.ts > CACHE_TTL_MS) {
-          localStorage.removeItem(CACHE_PREFIX + domain);
-          return null;
-        }
-        return entry;
-      } catch (_) { return null; }
+  try {
+    const res = await fetchWithTimeout(`https://rdap.org/domain/${domain}`);
+    if (res.ok) {
+      const d  = await res.json();
+      const ev = (d.events || []).find(e => e.eventAction === "registration");
+      if (ev) return new Date(ev.eventDate);
     }
+  } catch (_) {}
 
-    function setCache(domain, data) {
-      try { localStorage.setItem(CACHE_PREFIX + domain, JSON.stringify(data)); }
-      catch (_) { /* storage quota exceeded — skip silently */ }
-    }
-
-    // ── Fetch with timeout ────────────────────────────────────────────────────
-    async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timer);
-        return res;
-      } catch (err) {
-        clearTimeout(timer);
-        throw err;
-      }
-    }
-
-    // ── RDAP Domain Lookup ────────────────────────────────────────────────────
-    async function lookupDomain(domain) {
-      const tld = domain.split(".").pop();
-      let createdDate = null;
-      let registrar   = null;
-      let source      = null;
-
-      // Step 1: IANA bootstrap → find correct RDAP server for this TLD
-      setStatus("Finding RDAP server…");
-      try {
-        const bootstrapRes = await fetchWithTimeout("https://data.iana.org/rdap/dns.json");
-        if (bootstrapRes.ok) {
-          const bootstrap = await bootstrapRes.json();
-          let rdapBase = null;
-          for (const [tlds, urls] of (bootstrap.services || [])) {
-            if (tlds.includes(tld) && urls.length > 0) { rdapBase = urls[0]; break; }
-          }
-
-          if (rdapBase) {
-            setStatus(`Querying ${rdapBase.replace("https://","").split("/")[0]}…`);
-            try {
-              const rdapRes = await fetchWithTimeout(`${rdapBase}domain/${domain}`);
-              if (rdapRes.ok) {
-                const raw = await rdapRes.json();
-                ({ createdDate, registrar } = parseRdap(raw));
-                if (createdDate) source = rdapBase.replace("https://","").split("/")[0];
-              }
-            } catch (_) { /* timed out or failed — fall through */ }
-          }
-        }
-      } catch (_) { /* IANA bootstrap failed — fall through */ }
-
-      // Step 2: Fallback — rdap.org proxy
-      if (!createdDate) {
-        setStatus("Trying fallback RDAP server…");
-        try {
-          const res = await fetchWithTimeout(`https://rdap.org/domain/${domain}`);
-          if (res.ok) {
-            const raw = await res.json();
-            ({ createdDate, registrar } = parseRdap(raw));
-            if (createdDate) source = "rdap.org (proxy)";
-          }
-        } catch (_) { /* failed */ }
-      }
-
-      setStatus("");
-      return { createdDate, registrar, source: source || "RDAP (live)" };
-    }
-
-    // Extract createdDate + registrar from any RDAP response object
-    function parseRdap(raw) {
-      let createdDate = null;
-      let registrar   = null;
-
-      const regEvent = (raw.events || []).find(e => e.eventAction === "registration");
-      if (regEvent) createdDate = new Date(regEvent.eventDate);
-
-      for (const entity of (raw.entities || [])) {
-        if (entity.roles?.includes("registrar")) {
-          registrar = entity.vcardArray?.[1]?.find(v => v[0] === "fn")?.[3]
-                   || entity.publicIds?.[0]?.identifier
-                   || "Unknown Registrar";
-          break;
-        }
-      }
-      return { createdDate, registrar };
-    }
-
-    // ── Render ────────────────────────────────────────────────────────────────
-    function renderResult(domain, { createdDate, registrar, source }) {
-      document.getElementById("loading").style.display      = "none";
-      document.getElementById("error-msg").style.display    = "none";
-      document.getElementById("main-content").style.display = "block";
-
-      document.getElementById("info-registrar").textContent = registrar || "Not available";
-      document.getElementById("info-source").textContent    = source    || "RDAP";
-
-      const regEl     = document.getElementById("info-registered");
-      const ageEl     = document.getElementById("info-age");
-      const riskEl    = document.getElementById("info-risk");
-      const banner    = document.getElementById("alert-banner");
-      const alertIcon = document.getElementById("alert-icon");
-      const alertTitle= document.getElementById("alert-title");
-      const alertBody = document.getElementById("alert-body");
-      const tips      = document.getElementById("tips-section");
-
-      if (!createdDate || isNaN(createdDate.getTime())) {
-        regEl.textContent = "Not available";
-        ageEl.textContent = "Unknown";
-        riskEl.textContent = "Unknown";
-        riskEl.className = "badge";
-        banner.className = "warn";
-        banner.style.display = "block";
-        alertIcon.textContent  = "❓";
-        alertTitle.textContent = "Domain age unavailable";
-        alertBody.textContent  = "RDAP returned no registration date for this domain. This can happen with privacy-protected or non-standard TLD registrations. Proceed with normal caution.";
-        return;
-      }
-
-      const diffDays   = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
-      const diffWeeks  = Math.floor(diffDays / 7);
-      const diffMonths = Math.floor(diffDays / 30);
-
-      regEl.textContent = createdDate.toLocaleDateString("en-US", {
-        year: "numeric", month: "long", day: "numeric"
-      });
-
-      let ageText, riskLevel, riskClass, bannerClass, icon, title, body;
-
-      if (diffDays <= 3) {
-        ageText = `${diffDays} day${diffDays !== 1 ? "s" : ""} old`;
-        riskLevel = "CRITICAL RISK"; riskClass = "badge-critical"; bannerClass = "critical"; icon = "🚨";
-        title = "Critical — Domain registered days ago";
-        body  = `This domain was created only ${diffDays} day${diffDays !== 1 ? "s" : ""} ago. This is an extremely strong indicator of a phishing attack. Do NOT engage with this email.`;
-      } else if (diffDays <= 7) {
-        ageText = `${diffDays} days old`;
-        riskLevel = "CRITICAL RISK"; riskClass = "badge-critical"; bannerClass = "critical"; icon = "🚨";
-        title = "Critical — Domain registered this week";
-        body  = `Registered just ${diffDays} days ago. Freshly created domains are heavily associated with fraud and phishing campaigns. Exercise extreme caution.`;
-      } else if (diffDays <= 30) {
-        ageText = `${diffWeeks} week${diffWeeks !== 1 ? "s" : ""} old`;
-        riskLevel = "HIGH RISK"; riskClass = "badge-danger"; bannerClass = "danger"; icon = "⛔";
-        title = "High Risk — Domain registered this month";
-        body  = `Domain is only ${diffDays} days old. Domains under 30 days are frequently used in phishing, BEC, and scam campaigns.`;
-      } else if (diffDays <= 90) {
-        ageText = `${diffMonths} month${diffMonths !== 1 ? "s" : ""} old`;
-        riskLevel = "ELEVATED RISK"; riskClass = "badge-warn"; bannerClass = "warn"; icon = "⚠️";
-        title = "Caution — Recently registered domain";
-        body  = `This domain is ${diffDays} days old. Recent registrations warrant caution — especially if you weren't expecting this email.`;
-      } else if (diffDays <= 365) {
-        ageText = `${diffMonths} months old`;
-        riskLevel = "LOW RISK"; riskClass = "badge-warn"; bannerClass = "warn"; icon = "⚠️";
-        title = "Notice — Domain under 1 year old";
-        body  = `Domain registered ${diffMonths} months ago. Most established businesses have domains older than a year.`;
-      } else {
-        const years = (diffDays / 365).toFixed(1);
-        ageText = `${years} years old`;
-        riskLevel = "SAFE"; riskClass = "badge-safe"; bannerClass = "safe"; icon = "✅";
-        title = "Domain appears established";
-        body  = `This domain has been registered for ${years} years. No domain-age based red flags detected.`;
-      }
-
-      ageEl.textContent       = ageText;
-      riskEl.textContent      = riskLevel;
-      riskEl.className        = `badge ${riskClass}`;
-      banner.className        = bannerClass;
-      banner.style.display    = "block";
-      alertIcon.textContent   = icon;
-      alertTitle.textContent  = title;
-      alertBody.textContent   = body;
-
-      if (diffDays <= 90) tips.style.display = "block";
-    }
-
-    function showError(msg) {
-      document.getElementById("loading").style.display   = "none";
-      document.getElementById("error-msg").style.display = "block";
-      document.getElementById("error-detail").textContent = msg;
-    }
-
-    function setStatus(msg) {
-      const el = document.getElementById("loading-status");
-      if (el) el.textContent = msg;
-    }
-  </script>
+  return null;
+}
+</script>
 </body>
 </html>
