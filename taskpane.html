@@ -630,33 +630,86 @@ const KNOWN_SAFE = [
 ];
 
 const BRANDS = [
-  { brand:"microsoft",       domains:["microsoft.com","outlook.com","office.com","live.com"] },
-  { brand:"apple",           domains:["apple.com","icloud.com"] },
-  { brand:"amazon",          domains:["amazon.com","amazonaws.com"] },
-  { brand:"google",          domains:["google.com","gmail.com"] },
-  { brand:"paypal",          domains:["paypal.com"] },
+  // Tech
+  { brand:"microsoft",       domains:["microsoft.com","outlook.com","office.com","live.com","microsoftonline.com"] },
+  { brand:"apple",           domains:["apple.com","icloud.com","appleid.apple.com"] },
+  { brand:"amazon",          domains:["amazon.com","amazonaws.com","amazon.co.uk","amazon.ca"] },
+  { brand:"google",          domains:["google.com","gmail.com","googlemail.com","accounts.google.com"] },
+  { brand:"facebook",        domains:["facebook.com","meta.com","fb.com","instagram.com"] },
   { brand:"netflix",         domains:["netflix.com"] },
-  { brand:"facebook",        domains:["facebook.com","meta.com"] },
-  { brand:"chase",           domains:["chase.com","jpmchase.com"] },
-  { brand:"bank of america", domains:["bankofamerica.com"] },
+  { brand:"adobe",           domains:["adobe.com","adobelogin.com"] },
+  { brand:"dropbox",         domains:["dropbox.com","dropboxmail.com"] },
+  { brand:"linkedin",        domains:["linkedin.com"] },
+  { brand:"twitter",         domains:["twitter.com","x.com"] },
+  { brand:"zoom",            domains:["zoom.us","zoom.com"] },
+  { brand:"docusign",        domains:["docusign.com","docusign.net"] },
+  // Finance / Banking
+  { brand:"paypal",          domains:["paypal.com","paypal-corp.com"] },
+  { brand:"chase",           domains:["chase.com","jpmchase.com","jpmorgan.com"] },
+  { brand:"bank of america", domains:["bankofamerica.com","bac.com"] },
   { brand:"wells fargo",     domains:["wellsfargo.com"] },
+  { brand:"citibank",        domains:["citibank.com","citi.com"] },
+  { brand:"capital one",     domains:["capitalone.com"] },
+  { brand:"american express",domains:["americanexpress.com","aexp.com"] },
+  { brand:"discover",        domains:["discover.com","discovercard.com"] },
+  { brand:"venmo",           domains:["venmo.com"] },
+  { brand:"coinbase",        domains:["coinbase.com"] },
+  { brand:"stripe",          domains:["stripe.com"] },
+  { brand:"square",          domains:["squareup.com","square.com"] },
+  // Government
   { brand:"irs",             domains:["irs.gov"] },
-  { brand:"fedex",           domains:["fedex.com"] },
+  { brand:"social security", domains:["ssa.gov"] },
+  { brand:"medicare",        domains:["medicare.gov","cms.gov"] },
+  { brand:"usps",            domains:["usps.com","usps.gov"] },
+  { brand:"fbi",             domains:["fbi.gov"] },
+  { brand:"dhs",             domains:["dhs.gov"] },
+  // Shipping
+  { brand:"fedex",           domains:["fedex.com","fedex.net"] },
   { brand:"ups",             domains:["ups.com"] },
-  { brand:"usps",            domains:["usps.com"] },
+  { brand:"dhl",             domains:["dhl.com","dhl.de"] },
+  // Telecom / Utilities
+  { brand:"at&t",            domains:["att.com","attonline.com"] },
+  { brand:"verizon",         domains:["verizon.com","verizonwireless.com"] },
+  { brand:"comcast",         domains:["comcast.com","comcast.net","xfinity.com"] },
+  // Retail
+  { brand:"walmart",         domains:["walmart.com"] },
+  { brand:"target",          domains:["target.com"] },
+  { brand:"ebay",            domains:["ebay.com"] },
+  { brand:"bestbuy",         domains:["bestbuy.com"] },
 ];
 
-const SUSPICIOUS_TLDS = ["xyz","top","click","loan","work","gq","tk","ml","ga","cf"];
+const SUSPICIOUS_TLDS = [
+  // Free/abused TLDs
+  "gq","tk","ml","ga","cf","pw",
+  // High-abuse generic TLDs  
+  "xyz","top","click","loan","work","win","bid","download","stream",
+  "review","trade","science","party","date","faith","racing",
+  "accountant","cricket","webcam","men","country","kim",
+  // Misleading TLDs
+  "support","help","services","solutions","claims","refund",
+];
 const LOOKALIKES = [
-  { real:"paypal.com",    patterns:["paypa1","paypai","paypal-","paypalservice"] },
-  { real:"microsoft.com", patterns:["micros0ft","microsofft","microsoft-","rnicrosof"] },
-  { real:"apple.com",     patterns:["apple-","appie","apple-id"] },
-  { real:"amazon.com",    patterns:["arnazon","amaz0n","amazon-","amazonservice"] },
-  { real:"google.com",    patterns:["go0gle","googie","google-"] },
-  { real:"netflix.com",   patterns:["netfIix","netfix","netflix-"] },
-  { real:"chase.com",     patterns:["chase-","chas3","chasebank"] },
-  { real:"irs.gov",       patterns:["irs-","irs.com","irsrefund"] },
-  { real:"fedex.com",     patterns:["fedex-","fe-dex"] },
+  { real:"paypal.com",         patterns:["paypa1","paypai","paypal-","paypalservice","pay-pal","paypol"] },
+  { real:"microsoft.com",      patterns:["micros0ft","microsofft","microsoft-","rnicrosof","m1crosoft","mlcrosoft"] },
+  { real:"apple.com",          patterns:["apple-","appie","apple-id","appleserv","aple.","appl3"] },
+  { real:"amazon.com",         patterns:["arnazon","amaz0n","amazon-","amazonservice","arnazon","amazom"] },
+  { real:"google.com",         patterns:["go0gle","googie","google-","g00gle","gooogle","googl3"] },
+  { real:"netflix.com",        patterns:["netfIix","netfix","netflix-","netfl1x","netfilx"] },
+  { real:"chase.com",          patterns:["chase-","chas3","chasebank","chase-secure","chas3bank"] },
+  { real:"irs.gov",            patterns:["irs-","irs.com","irsrefund","irs-gov","internal-revenue"] },
+  { real:"fedex.com",          patterns:["fedex-","fe-dex","fedexp","fedexpress-"] },
+  { real:"bank of america",    patterns:["bankofamerica-","bofa-","bankamerica","bank0famerica"] },
+  { real:"wells fargo",        patterns:["wellsfargo-","wellfargo","wellsf4rgo","wllsfargo"] },
+  { real:"coinbase.com",       patterns:["coinbase-","c0inbase","coinbas3","coinbasepro-"] },
+  { real:"docusign.com",       patterns:["docusign-","d0cusign","docusigning","docu-sign"] },
+  { real:"linkedin.com",       patterns:["linkedin-","linkedln","iinkedin","linked1n"] },
+  { real:"instagram.com",      patterns:["instagram-","1nstagram","instgram","instagr4m"] },
+  { real:"facebook.com",       patterns:["facebook-","faceb00k","facbook","facebok"] },
+  { real:"dropbox.com",        patterns:["dropbox-","dr0pbox","dropb0x"] },
+  { real:"zoom.us",            patterns:["zoom-","z0om","zoorn","zoom-meeting"] },
+  { real:"usps.com",           patterns:["usps-","usps.org","us-ps","uspstracking"] },
+  { real:"ups.com",            patterns:["ups-","upstracking","up5.com"] },
+  { real:"dhl.com",            patterns:["dhl-","dhI.com","dh1.com"] },
 ];
 
 async function runSafetyCheck() {
@@ -680,14 +733,19 @@ async function runSafetyCheck() {
     setSafetyStatus("Checking domain age…");
 
     // ── Run all checks in parallel ────────────────────────────────────────
-    // RDAP runs concurrently with all instant checks — total time = RDAP time only
+    // RDAP is the only network call — all other checks are pure JS (instant)
+    // Promise.all means total time = RDAP time only, not sum of all checks
     const [domainAgeResult, ...instantResults] = await Promise.all([
-      checkDomainAge(senderDomain),
-      Promise.resolve(checkDisplayName(senderName, senderEmail, senderDomain)),
-      Promise.resolve(checkFreeProvider(senderDomain, senderName)),
-      Promise.resolve(checkReplyTo(senderEmail, replyToEmail)),
-      Promise.resolve(checkSubject(subject)),
-      Promise.resolve(checkLookalike(senderDomain)),
+      checkDomainAge(senderDomain),                                          // network (cached after first)
+      Promise.resolve(checkDisplayName(senderName, senderEmail, senderDomain)), // instant
+      Promise.resolve(checkFreeProvider(senderDomain, senderName)),             // instant
+      Promise.resolve(checkReplyTo(senderEmail, replyToEmail)),                 // instant
+      Promise.resolve(checkSubject(subject)),                                    // instant
+      Promise.resolve(checkLookalike(senderDomain)),                            // instant
+      Promise.resolve(checkHomoglyphs(senderDomain)),                           // instant
+      Promise.resolve(checkNumberSubstitution(senderDomain)),                   // instant
+      Promise.resolve(checkFreeSubdomain(senderDomain)),                        // instant
+      Promise.resolve(checkSubjectUrls(subject)),                               // instant
     ]);
 
     setSafetyStatus("");
@@ -842,6 +900,220 @@ function checkLookalike(domain) {
     desc:`.${tld} domains are frequently used in phishing campaigns.`, weight:12 };
   return { name:"Domain Spoofing", icon:"✅", status:"pass", badge:"LOOKS CLEAN",
     desc:"No lookalike or typosquat patterns detected.", weight:0 };
+}
+
+
+// ── CHECK 7: Homoglyph / Unicode character detection ─────────────────────────
+function checkHomoglyphs(domain) {
+  // Map of common homoglyph substitutions (Unicode lookalikes for ASCII)
+  const homoglyphs = {
+    'a': ['а','ä','á','à','â','ã','å','ą','α'],  // Cyrillic а, accented
+    'e': ['е','ë','é','è','ê','ę','ε'],           // Cyrillic е
+    'o': ['о','ö','ó','ò','ô','õ','ø','ο','σ'],  // Cyrillic о, Greek
+    'p': ['р','ρ'],                                // Cyrillic р, Greek rho
+    'c': ['с','ç','ć'],                            // Cyrillic с
+    'x': ['х','χ'],                                // Cyrillic х, Greek chi
+    'i': ['і','ï','í','ì','î','ı'],               // Cyrillic і, dotless i
+    'n': ['η','ñ','ń'],                            // Greek eta
+    'u': ['υ','ü','ú','ù','û','ų'],               // Greek upsilon
+    'y': ['у','ý','ÿ'],                            // Cyrillic у
+    'k': ['κ'],                                    // Greek kappa
+    'v': ['ν'],                                    // Greek nu
+    'w': ['ω'],                                    // Greek omega
+    'b': ['б','β'],                                // Cyrillic б, Greek beta
+    'd': ['ď','δ'],                                // Czech, Greek delta
+    'g': ['ġ','γ'],                                // Greek gamma
+    'h': ['η'],                                    // Greek eta
+    'l': ['І','ӏ','ι','ℓ'],                       // Cyrillic capital І, Greek iota
+    's': ['ѕ','ş','ś'],                            // Cyrillic ѕ
+    't': ['τ','ţ'],                                // Greek tau
+  };
+
+  const domainLower = domain.toLowerCase();
+  // Check for non-ASCII characters
+  if (!/^[a-z0-9.-]+$/.test(domainLower)) {
+    // Find which suspicious chars
+    const nonAscii = [...domainLower].filter(c => !/[a-z0-9.\-]/.test(c));
+    return {
+      name: "Unicode Spoofing",
+      icon: "🚨",
+      status: "fail",
+      badge: "HOMOGLYPH",
+      desc: `Domain contains non-ASCII characters: "${nonAscii.join('')}" — designed to look like a real domain while being completely different.`,
+      weight: 45
+    };
+  }
+
+  // Check for homoglyph substitutions in domain name (without TLD)
+  const domainName = domainLower.split('.').slice(0,-1).join('.');
+  const foundHomoglyphs = [];
+  for (const [ascii, variants] of Object.entries(homoglyphs)) {
+    for (const variant of variants) {
+      if (domainName.includes(variant)) {
+        foundHomoglyphs.push(`"${variant}" (looks like "${ascii}")`);
+      }
+    }
+  }
+
+  if (foundHomoglyphs.length > 0) {
+    return {
+      name: "Unicode Spoofing",
+      icon: "🚨",
+      status: "fail",
+      badge: "HOMOGLYPH",
+      desc: `Domain uses look-alike characters: ${foundHomoglyphs.join(', ')}. This is a sophisticated spoofing attack.`,
+      weight: 45
+    };
+  }
+
+  return {
+    name: "Unicode Spoofing",
+    icon: "✅",
+    status: "pass",
+    badge: "CLEAN",
+    desc: "No Unicode homoglyph substitutions detected in domain.",
+    weight: 0
+  };
+}
+
+// ── CHECK 8: Number/symbol substitution in domain ────────────────────────────
+function checkNumberSubstitution(domain) {
+  const domainName = domain.split('.').slice(0,-1).join('.');
+
+  // Common letter→number/symbol substitutions used in phishing
+  const substitutions = [
+    { pattern: /0/g, letter: 'o', example: "'0' for 'o'" },
+    { pattern: /1/g, letter: 'l', example: "'1' for 'l' or 'i'" },
+    { pattern: /3/g, letter: 'e', example: "'3' for 'e'" },
+    { pattern: /4/g, letter: 'a', example: "'4' for 'a'" },
+    { pattern: /5/g, letter: 's', example: "'5' for 's'" },
+    { pattern: /8/g, letter: 'b', example: "'8' for 'b'" },
+    { pattern: /\$/g, letter: 's', example: "'$' for 's'" },
+    { pattern: /@/g, letter: 'a', example: "'@' for 'a'" },
+  ];
+
+  // Only flag if domain name contains numbers mixed with letters in suspicious ways
+  // (not flagging pure number domains or version numbers)
+  const hasLetters = /[a-z]/i.test(domainName);
+  const hasNumbers = /[0-9]/.test(domainName);
+
+  if (!hasLetters || !hasNumbers) {
+    return { name:"Number Substitution", icon:"✅", status:"pass", badge:"CLEAN",
+      desc:"No suspicious number/letter substitutions detected.", weight:0 };
+  }
+
+  // Check if replacing numbers with letters reveals a known brand
+  let decodedName = domainName
+    .replace(/0/g,'o').replace(/1/g,'l').replace(/3/g,'e')
+    .replace(/4/g,'a').replace(/5/g,'s').replace(/8/g,'b');
+
+  const knownBrandNames = [
+    'paypal','microsoft','apple','amazon','google','netflix','facebook',
+    'instagram','linkedin','dropbox','coinbase','docusign','wellsfargo',
+    'bankofamerica','chase','citibank','capitalcne','americanexpress'
+  ];
+
+  const matchedBrand = knownBrandNames.find(b => decodedName.includes(b));
+  if (matchedBrand && decodedName !== domainName) {
+    return {
+      name: "Number Substitution",
+      icon: "🚨",
+      status: "fail",
+      badge: "SUBSTITUTION",
+      desc: `Domain "${domain}" uses number substitutions that disguise "${matchedBrand}". Classic obfuscation technique.`,
+      weight: 38
+    };
+  }
+
+  return { name:"Number Substitution", icon:"✅", status:"pass", badge:"CLEAN",
+    desc:"No brand-targeting number substitutions detected.", weight:0 };
+}
+
+// ── CHECK 9: Free subdomain / hosted platform detection ──────────────────────
+function checkFreeSubdomain(domain) {
+  const freePlatforms = [
+    'blogspot.com','wordpress.com','wix.com','weebly.com','squarespace.com',
+    'typepad.com','tumblr.com','github.io','gitlab.io','netlify.app',
+    'vercel.app','web.app','firebaseapp.com','azurewebsites.net',
+    'herokuapp.com','repl.co','glitch.me','pages.dev','onrender.com',
+    '000webhostapp.com','byethost','infinityfree','awardspace',
+    'sites.google.com','notion.site','crd.co','carrd.co'
+  ];
+
+  const domainLower = domain.toLowerCase();
+  const matchedPlatform = freePlatforms.find(p => domainLower.endsWith('.' + p) || domainLower === p);
+
+  if (matchedPlatform) {
+    // Check if it's trying to impersonate something
+    const subdomain = domainLower.replace('.' + matchedPlatform, '');
+    const looksOfficial = ['paypal','microsoft','apple','amazon','google','bank',
+      'secure','login','verify','account','support','billing','update',
+      'confirm','alert','service','official'].some(w => subdomain.includes(w));
+
+    if (looksOfficial) {
+      return {
+        name: "Hosted Platform",
+        icon: "🚨",
+        status: "fail",
+        badge: "FREE SUBDOMAIN",
+        desc: `"${domain}" is a free hosted page on ${matchedPlatform} with an official-sounding name. Legitimate companies don't use free hosting platforms for business communications.`,
+        weight: 40
+      };
+    }
+    return {
+      name: "Hosted Platform",
+      icon: "⚠️",
+      status: "warn",
+      badge: "FREE HOST",
+      desc: `Sender is using a free hosting platform (${matchedPlatform}). Verify this is expected before acting.`,
+      weight: 10
+    };
+  }
+
+  return { name:"Hosted Platform", icon:"✅", status:"pass", badge:"CLEAN",
+    desc:"Domain is not using a free subdomain hosting platform.", weight:0 };
+}
+
+// ── CHECK 10: URL in subject domain age cross-check ───────────────────────────
+function checkSubjectUrls(subject, cachedResults) {
+  if (!subject) return { name:"Subject URLs", icon:"✅", status:"pass", badge:"NONE",
+    desc:"No subject to analyze.", weight:0 };
+
+  // Extract domains from URLs in subject line
+  const urlPattern = /https?:\/\/([a-zA-Z0-9.-]+)/g;
+  const matches = [...subject.matchAll(urlPattern)];
+
+  if (matches.length === 0) {
+    return { name:"Subject URLs", icon:"✅", status:"pass", badge:"NONE",
+      desc:"No URLs found in subject line.", weight:0 };
+  }
+
+  const suspiciousDomains = [];
+  for (const match of matches) {
+    const urlDomain = match[1].toLowerCase();
+    // Check against lookalikes and suspicious TLDs immediately (no network call)
+    const tld = urlDomain.split('.').pop();
+    const isSuspiciousTld = SUSPICIOUS_TLDS.includes(tld);
+    const isLookalike = LOOKALIKES.some(l => l.patterns.some(p => urlDomain.includes(p)));
+
+    if (isSuspiciousTld || isLookalike) {
+      suspiciousDomains.push(urlDomain);
+    }
+  }
+
+  if (suspiciousDomains.length > 0) {
+    return {
+      name: "Subject URLs",
+      icon: "🚨",
+      status: "fail",
+      badge: "SUSPICIOUS LINK",
+      desc: `Subject contains suspicious URL domain(s): ${suspiciousDomains.join(', ')}`,
+      weight: 35
+    };
+  }
+
+  return { name:"Subject URLs", icon:"✅", status:"pass", badge:"CLEAN",
+    desc:`Found ${matches.length} URL(s) in subject — no suspicious domains detected.`, weight:0 };
 }
 
 // ── Render safety results ─────────────────────────────────────────────────
