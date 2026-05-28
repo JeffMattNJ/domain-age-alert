@@ -8,11 +8,10 @@
     /**
      * commands.html — Background event handler
      *
-     * Automatically runs when a message is opened.
-     * Shows a badge/notification next to "Domain Age Alert" in the ribbon:
-     *   🔴 ErrorMessage  (red)    — domain under 90 days old
-     *   🟡 WarningMessage (yellow) — domain 90 days to 1 year old
-     *   No badge                  — domain over 1 year (safe)
+     * Auto-opens the taskpane ONLY when domain age is a risk:
+     *   🔴 Under 90 days  → auto-open taskpane + red notification bar
+     *   🟡 90 days–1 year → auto-open taskpane + yellow notification bar
+     *   ✅ Over 1 year    → silent, no action, no interruption
      *
      * Security:    HTTPS-only fetches, 5s timeout, XSS-safe
      * Performance: 24h localStorage cache, known-safe domain skip list
@@ -23,9 +22,7 @@
     const CACHE_TTL_MS  = 24 * 60 * 60 * 1000; // 24 hours
     const FETCH_TIMEOUT = 5000;                  // 5 seconds
 
-    Office.onReady(() => {
-      // Intentionally empty — handler registered via manifest LaunchEvent
-    });
+    Office.onReady(() => {});
 
     // ── Main handler — called by Outlook on message open ──────────────────────
     async function onMessageReadHandler(event) {
@@ -49,7 +46,17 @@
 
         const diffDays = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
 
-        // ── Red badge — under 90 days ──────────────────────────────────────
+        // ── Safe — over 1 year: do nothing, no interruption ───────────────────
+        if (diffDays > 365) {
+          // Clear any previous alert from an older email
+          Office.context.mailbox.item.notificationMessages.removeAsync(
+            "domainAgeAlert"
+          );
+          event.completed();
+          return;
+        }
+
+        // ── Under 90 days — RED: auto-open + red notification bar ─────────────
         if (diffDays <= 90) {
           let msg;
           if (diffDays <= 3) {
@@ -62,6 +69,7 @@
             msg = `⛔ CAUTION: "${domain}" is only ${diffDays} days old. Proceed carefully.`;
           }
 
+          // Show red notification bar
           Office.context.mailbox.item.notificationMessages.replaceAsync(
             "domainAgeAlert",
             {
@@ -71,23 +79,30 @@
             }
           );
 
-        // ── Yellow badge — 91 days to 1 year ──────────────────────────────
-        } else if (diffDays <= 365) {
+          // Auto-open the taskpane
+          Office.context.ui.displayDialogAsync(
+            "https://JeffMattNJ.github.io/domain-age-alert/taskpane.html",
+            { height: 60, width: 30, displayInIframe: true },
+            () => {}
+          );
+
+        // ── 90 days to 1 year — YELLOW: auto-open + yellow notification bar ───
+        } else {
           const months = Math.floor(diffDays / 30);
           Office.context.mailbox.item.notificationMessages.replaceAsync(
             "domainAgeAlert",
             {
               type: Office.MailboxEnums.ItemNotificationMessageType.WarningMessage,
-              message: `⚠️ NOTICE: "${domain}" is ${months} month(s) old. Most established businesses have older domains.`,
+              message: `⚠️ NOTICE: "${domain}" is only ${months} month(s) old. Most established businesses have older domains.`,
               persistent: true
             }
           );
 
-        // ── No badge — over 1 year (safe) ─────────────────────────────────
-        } else {
-          // Remove any previous alert if user navigates between emails
-          Office.context.mailbox.item.notificationMessages.removeAsync(
-            "domainAgeAlert"
+          // Auto-open the taskpane
+          Office.context.ui.displayDialogAsync(
+            "https://JeffMattNJ.github.io/domain-age-alert/taskpane.html",
+            { height: 60, width: 30, displayInIframe: true },
+            () => {}
           );
         }
 
@@ -109,7 +124,7 @@
           }
           localStorage.removeItem(CACHE_PREFIX + domain);
         }
-      } catch (_) { /* storage unavailable */ }
+      } catch (_) {}
 
       const createdDate = await rdapLookup(domain);
 
@@ -118,7 +133,7 @@
           createdDate: createdDate ? createdDate.toISOString() : null,
           ts: Date.now()
         }));
-      } catch (_) { /* quota exceeded */ }
+      } catch (_) {}
 
       return createdDate;
     }
@@ -157,7 +172,7 @@
             }
           }
         }
-      } catch (_) { /* fall through */ }
+      } catch (_) {}
 
       try {
         const res = await fetchTimeout(`https://rdap.org/domain/${domain}`);
@@ -166,7 +181,7 @@
           const ev = (d.events || []).find(e => e.eventAction === "registration");
           if (ev) return new Date(ev.eventDate);
         }
-      } catch (_) { /* failed */ }
+      } catch (_) {}
 
       return null;
     }
