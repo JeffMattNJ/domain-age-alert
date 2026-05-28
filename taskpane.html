@@ -602,6 +602,40 @@
       alertBody.textContent   = body;
 
       if (diffDays <= 90) tips.style.display = "block";
+
+      // ── Set colored notification bar above email body ─────────────────────
+      // This fires from the taskpane — no LaunchEvent or commands.html needed
+      try {
+        let notifType = null;
+        let notifMsg  = null;
+
+        if (diffDays <= 7) {
+          notifType = Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage;
+          notifMsg  = `🚨 CRITICAL: "${domain}" registered ${diffDays} day(s) ago — very likely phishing!`;
+        } else if (diffDays <= 30) {
+          notifType = Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage;
+          notifMsg  = `🚨 HIGH RISK: "${domain}" registered ${diffDays} days ago. Verify before acting.`;
+        } else if (diffDays <= 90) {
+          notifType = Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage;
+          notifMsg  = `⛔ CAUTION: "${domain}" is only ${Math.floor(diffDays/30)} month(s) old. Proceed carefully.`;
+        } else if (diffDays <= 365) {
+          notifType = Office.MailboxEnums.ItemNotificationMessageType.WarningMessage;
+          notifMsg  = `⚠️ NOTICE: "${domain}" is ${Math.floor(diffDays/30)} months old. Most established businesses have older domains.`;
+        } else {
+          // Safe — remove any previous notification
+          Office.context.mailbox.item.notificationMessages.removeAsync("domainAgeAlert");
+        }
+
+        if (notifType && notifMsg) {
+          Office.context.mailbox.item.notificationMessages.replaceAsync("domainAgeAlert", {
+            type: notifType,
+            message: notifMsg,
+            persistent: true
+          });
+        }
+      } catch (_) {
+        // Silent fail — notification bar is bonus feature, not critical
+      }
     }
 
     function showError(msg) {
