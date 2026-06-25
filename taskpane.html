@@ -173,6 +173,100 @@
     .refresh-btn:hover { border-color: var(--accent); color: var(--text); }
 
 
+
+    /* ── Safety percentage circle ── */
+    .safety-rating-wrap {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 14px;
+    }
+    .circle-gauge {
+      position: relative;
+      width: 90px;
+      height: 90px;
+      flex-shrink: 0;
+    }
+    .circle-gauge svg {
+      transform: rotate(-90deg);
+      width: 90px;
+      height: 90px;
+    }
+    .circle-bg {
+      fill: none;
+      stroke: var(--surface2);
+      stroke-width: 8;
+    }
+    .circle-fill {
+      fill: none;
+      stroke-width: 8;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.8s ease, stroke 0.4s ease;
+      stroke-dasharray: 226;
+      stroke-dashoffset: 226;
+    }
+    .circle-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      line-height: 1.1;
+    }
+    .circle-pct {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      display: block;
+    }
+    .circle-label {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .rating-details {
+      flex: 1;
+      min-width: 0;
+    }
+    .rating-verdict {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      letter-spacing: 0.02em;
+    }
+    .rating-sub {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .rating-breakdown {
+      display: flex;
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .rating-stat {
+      text-align: center;
+    }
+    .rating-stat-num {
+      font-size: 18px;
+      font-weight: 700;
+      display: block;
+    }
+    .rating-stat-lbl {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .stat-pass { color: var(--safe); }
+    .stat-warn { color: var(--warn); }
+    .stat-fail { color: var(--danger); }
+
     /* ── User guidance section ── */
     .guidance-box {
       background: var(--surface);
@@ -378,6 +472,39 @@
     <div id="alert-line">
       <span class="alert-prefix" id="alert-prefix"></span>
       <span class="alert-reason" id="alert-reason"></span>
+    </div>
+
+
+    <!-- Safety percentage rating -->
+    <div class="safety-rating-wrap" id="safety-rating" style="display:none;">
+      <div class="circle-gauge">
+        <svg viewBox="0 0 90 90">
+          <circle class="circle-bg" cx="45" cy="45" r="36"/>
+          <circle class="circle-fill" id="circle-fill" cx="45" cy="45" r="36"/>
+        </svg>
+        <div class="circle-text">
+          <span class="circle-pct" id="circle-pct">0%</span>
+          <span class="circle-label">Safe</span>
+        </div>
+      </div>
+      <div class="rating-details">
+        <div class="rating-verdict" id="rating-verdict"></div>
+        <div class="rating-sub" id="rating-sub"></div>
+        <div class="rating-breakdown">
+          <div class="rating-stat">
+            <span class="rating-stat-num stat-pass" id="stat-pass">0</span>
+            <span class="rating-stat-lbl">Passed</span>
+          </div>
+          <div class="rating-stat">
+            <span class="rating-stat-num stat-warn" id="stat-warn">0</span>
+            <span class="rating-stat-lbl">Caution</span>
+          </div>
+          <div class="rating-stat">
+            <span class="rating-stat-num stat-fail" id="stat-fail">0</span>
+            <span class="rating-stat-lbl">Failed</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Full safety check results -->
@@ -1248,11 +1375,66 @@ function checkSubjectUrls(subject, cachedResults) {
     desc:`Found ${matches.length} URL(s) in subject — no suspicious domains detected.`, weight:0 };
 }
 
+
+// ── Render safety percentage circle ─────────────────────────────────────────
+function renderSafetyCircle(safeScore, results, bannerClass) {
+  const wrap      = document.getElementById("safety-rating");
+  const circleFill = document.getElementById("circle-fill");
+  const circlePct  = document.getElementById("circle-pct");
+  const verdict    = document.getElementById("rating-verdict");
+  const sub        = document.getElementById("rating-sub");
+
+  const passCount = results.filter(r => r.status === "pass").length;
+  const warnCount = results.filter(r => r.status === "warn").length;
+  const failCount = results.filter(r => r.status === "fail").length;
+  const infoCount = results.filter(r => r.status === "info").length;
+
+  document.getElementById("stat-pass").textContent = passCount;
+  document.getElementById("stat-warn").textContent = warnCount;
+  document.getElementById("stat-fail").textContent = failCount;
+
+  // Color and label based on score
+  let color, verdictText, subText;
+  if (safeScore >= 90) {
+    color = "#22c55e"; verdictText = "Looks Legitimate";
+    subText = "This email passes all safety checks with a high confidence rating.";
+  } else if (safeScore >= 75) {
+    color = "#84cc16"; verdictText = "Mostly Safe";
+    subText = "Minor concerns detected. Use your judgment before responding.";
+  } else if (safeScore >= 55) {
+    color = "#f59e0b"; verdictText = "Proceed with Caution";
+    subText = "Some red flags detected. Verify the sender before acting.";
+  } else if (safeScore >= 35) {
+    color = "#ef4444"; verdictText = "Suspicious Email";
+    subText = "Significant concerns. Do not click links without verifying.";
+  } else {
+    color = "#dc2626"; verdictText = "Likely Phishing";
+    subText = "Multiple red flags detected. Do not engage with this email.";
+  }
+
+  // Animate the circle — circumference of r=36 circle = 2*PI*36 = ~226.2
+  const circumference = 226.2;
+  const offset = circumference - (safeScore / 100) * circumference;
+
+  circleFill.style.stroke = color;
+  circleFill.style.strokeDashoffset = offset;
+  circlePct.textContent = safeScore + "%";
+  circlePct.style.color = color;
+  verdict.textContent = verdictText;
+  verdict.style.color = color;
+  sub.textContent = subText;
+
+  wrap.style.display = "flex";
+}
+
 // ── Render safety results ─────────────────────────────────────────────────
 function renderSafetyResults(results) {
   document.getElementById("safety-loading").style.display = "none";
   document.getElementById("safety-section").style.display = "block";
   document.getElementById("guidance-box").style.display   = "block";
+
+  // Render the percentage circle
+  renderSafetyCircle(safe, results, bannerClass);
 
 
 
