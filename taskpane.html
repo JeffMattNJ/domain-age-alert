@@ -172,6 +172,60 @@
     }
     .refresh-btn:hover { border-color: var(--accent); color: var(--text); }
 
+
+    /* ── User guidance section ── */
+    .guidance-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-top: 14px;
+    }
+    .guidance-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .guidance-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .guidance-item:last-child { border-bottom: none; }
+    .guidance-num {
+      width: 20px; height: 20px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; color: #fff;
+      flex-shrink: 0; margin-top: 1px;
+    }
+
+    /* ── Legal disclaimer ── */
+    .disclaimer {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: var(--surface2);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .disclaimer strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
     footer { margin-top: 16px; text-align: center; font-size: 10px; color: var(--border); }
 
     /* ── Is This Safe button ── */
@@ -243,8 +297,8 @@
   <header>
     <div class="shield-icon">🛡️</div>
     <div>
-      <h1>Domain Age Alert</h1>
-      <p>Phishing &amp; scam domain detector</p>
+      <h1>Is This Legit?</h1>
+      <p>Email safety &amp; legitimacy analyzer</p>
     </div>
   </header>
 
@@ -313,13 +367,8 @@
   </div>
 
 
-    <!-- Is This Safe button -->
-    <button class="its-btn" id="its-btn" onclick="runSafetyCheck()">
-      🔍 Is This Safe? — Run Full Analysis
-    </button>
-
-    <!-- Safety loading indicator -->
-    <div id="safety-loading">
+    <!-- Safety loading indicator (auto-runs) -->
+    <div id="safety-loading" style="display:none;">
       <div class="mini-spinner"></div>
       Running safety checks…<br>
       <span id="safety-status" style="font-size:10px;color:var(--muted)"></span>
@@ -343,7 +392,38 @@
       <div id="checks-container"></div>
     </div>
 
-  <footer>Domain Age Alert · for Microsoft Outlook</footer>
+
+    <!-- User guidance section -->
+    <div class="guidance-box" id="guidance-box" style="display:none;">
+      <div class="guidance-title">💬 What should I do?</div>
+      <div class="guidance-item">
+        <div class="guidance-num">1</div>
+        <div><strong style="color:var(--text);">Were you expecting this email?</strong><br>
+        If yes and the sender is familiar, use your best judgment. If no, treat it with extra caution.</div>
+      </div>
+      <div class="guidance-item">
+        <div class="guidance-num">2</div>
+        <div><strong style="color:var(--text);">If you know these people — call and confirm.</strong><br>
+        Before clicking any links or responding, verify by phone or in person using a known number — not one from the email itself.</div>
+      </div>
+      <div class="guidance-item">
+        <div class="guidance-num">3</div>
+        <div><strong style="color:var(--text);">If you don't recognize the sender — delete it.</strong><br>
+        Do not click links, open attachments, or reply. Report it as phishing using the Report button in Outlook.</div>
+      </div>
+    </div>
+
+    <!-- Legal disclaimer -->
+    <div class="disclaimer">
+      <strong>Disclaimer:</strong> Is This Legit? is an automated analysis tool designed to assist users
+      in evaluating email indicators. It does not guarantee that any email is safe or malicious.
+      Results are based on publicly available domain registration data and pattern matching only.
+      This tool is not a substitute for professional cybersecurity advice. Always apply your own
+      judgment. Your organization is not liable for actions taken based solely on this tool's output.
+      If in doubt, contact your IT or security team before acting on any suspicious email.
+    </div>
+
+  <footer>Is This Legit? · for Microsoft Outlook</footer>
 
   <script>
     // ── Config ───────────────────────────────────────────────────────────────
@@ -373,6 +453,16 @@
         document.getElementById("info-domain").textContent = currentDomain;
 
         await runLookup(currentDomain, false);
+
+      // Auto-run full safety analysis immediately after domain age loads
+      await runSafetyCheck(
+        currentEmail,
+        from.displayName || "",
+        currentDomain,
+        item.subject || "",
+        item.replyTo || []
+      );
+
       } catch (err) {
         showError(err.message || "Unknown error");
       }
@@ -756,23 +846,23 @@ const LOOKALIKES = [
   { real:"dhl.com",            patterns:["dhl-","dhI.com","dh1.com"] },
 ];
 
-async function runSafetyCheck() {
-  const btn = document.getElementById("its-btn");
-  btn.disabled = true;
-  btn.textContent = "⏳ Analyzing…";
+async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo) {
+  // Accept params from onReady (already loaded) or re-read from Office if called standalone
+  if (!senderEmail) {
+    const item = Office.context.mailbox.item;
+    senderEmail  = item.from?.emailAddress?.toLowerCase() || "";
+    senderName   = item.from?.displayName || "";
+    senderDomain = senderEmail.split("@")[1] || "";
+    subject      = item.subject || "";
+    replyTo      = item.replyTo || [];
+  }
 
   document.getElementById("safety-loading").style.display = "block";
   document.getElementById("safety-section").style.display = "none";
   document.getElementById("alert-line").style.display     = "none";
 
   try {
-    const item = Office.context.mailbox.item;
-    const senderEmail  = item.from?.emailAddress?.toLowerCase() || "";
-    const senderName   = item.from?.displayName || "";
-    const senderDomain = senderEmail.split("@")[1] || "";
-    const subject      = item.subject || "";
-    const replyTo      = item.replyTo || [];
-    const replyToEmail = replyTo.length > 0 ? replyTo[0].emailAddress?.toLowerCase() : null;
+    const replyToEmail = replyTo && replyTo.length > 0 ? replyTo[0].emailAddress?.toLowerCase() : null;
 
     setSafetyStatus("Checking domain age…");
 
@@ -799,8 +889,6 @@ async function runSafetyCheck() {
 
   } catch (err) {
     document.getElementById("safety-loading").style.display = "none";
-    btn.disabled = false;
-    btn.textContent = "🔍 Is This Safe? — Run Full Analysis";
   }
 }
 
@@ -1164,10 +1252,9 @@ function checkSubjectUrls(subject, cachedResults) {
 function renderSafetyResults(results) {
   document.getElementById("safety-loading").style.display = "none";
   document.getElementById("safety-section").style.display = "block";
+  document.getElementById("guidance-box").style.display   = "block";
 
-  const btn = document.getElementById("its-btn");
-  btn.disabled = false;
-  btn.textContent = "↺ Re-run Analysis";
+
 
   const risk      = Math.min(100, results.reduce((s,r) => s+(r.weight||0), 0));
   const safe      = Math.max(0, 100 - risk);
