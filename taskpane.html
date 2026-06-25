@@ -1433,11 +1433,6 @@ function renderSafetyResults(results) {
   document.getElementById("safety-section").style.display = "block";
   document.getElementById("guidance-box").style.display   = "block";
 
-  // Render the percentage circle
-  renderSafetyCircle(safe, results, bannerClass);
-
-
-
   const risk      = Math.min(100, results.reduce((s,r) => s+(r.weight||0), 0));
   const safe      = Math.max(0, 100 - risk);
   const failCount = results.filter(r => r.status==="fail").length;
@@ -1470,6 +1465,9 @@ function renderSafetyResults(results) {
     prefixText  = "✅ CLEAR —";
     reasonText  = "No red flags detected. This email passes all safety checks.";
   }
+
+  // Render percentage circle now that safe + bannerClass are defined
+  renderSafetyCircle(safe, results, bannerClass);
 
   // Alert line
   const alertLine = document.getElementById("alert-line");
