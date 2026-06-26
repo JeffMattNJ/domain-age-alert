@@ -1048,6 +1048,27 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     setSafetyStatus("");
 
     const results = [domainAgeResult, ...instantResults];
+
+    // ── Combination multiplier: name mismatch + financial request ─────────────
+    // These two together signal a payroll diversion / social engineering attack
+    const hasNameMismatch   = results.some(r =>
+      r.name === "Display Name Check" && (r.status === "warn" || r.status === "fail")
+    );
+    const hasFinancialFlag  = results.some(r =>
+      r.name === "Financial Request" && r.status === "warn"
+    );
+
+    if (hasNameMismatch && hasFinancialFlag) {
+      results.push({
+        name:   "Combined Risk",
+        icon:   "🚨",
+        status: "fail",
+        badge:  "PAYROLL DIVERSION RISK",
+        desc:   "Name mismatch AND financial request detected together — this combination is the hallmark of a payroll diversion or direct deposit fraud attack. Do not action any financial requests without verbally confirming with the sender on a known phone number.",
+        weight: 25
+      });
+    }
+
     renderSafetyResults(results);
 
   } catch (err) {
