@@ -598,6 +598,11 @@
       let ccList = [];
       try { ccList = item.cc || []; } catch (_) { ccList = []; }
 
+      // Get recipient's own email so we never flag our own domain
+      let recipientEmail = "";
+      try { recipientEmail = Office.context.mailbox.userProfile.emailAddress?.toLowerCase() || ""; }
+      catch (_) { recipientEmail = ""; }
+
       await runSafetyCheck(
         currentEmail,
         from.displayName || "",
@@ -605,7 +610,8 @@
         item.subject || "",
         item.replyTo || [],
         bodyText,
-        ccList
+        ccList,
+        recipientEmail
       );
 
       } catch (err) {
@@ -991,19 +997,23 @@ const LOOKALIKES = [
   { real:"dhl.com",            patterns:["dhl-","dhI.com","dh1.com"] },
 ];
 
-async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo, bodyText, ccList) {
+async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo, bodyText, ccList, recipientEmail) {
   // Accept params from onReady (already loaded) or re-read from Office if called standalone
-  bodyText = bodyText || "";
-  ccList   = ccList   || [];
+  bodyText       = bodyText       || "";
+  ccList         = ccList         || [];
+  recipientEmail = recipientEmail || "";
   if (!senderEmail) {
     const item = Office.context.mailbox.item;
-    senderEmail  = item.from?.emailAddress?.toLowerCase() || "";
-    senderName   = item.from?.displayName || "";
-    senderDomain = senderEmail.split("@")[1] || "";
-    subject      = item.subject || "";
-    replyTo      = item.replyTo || [];
-    ccList       = item.cc     || [];
+    senderEmail    = item.from?.emailAddress?.toLowerCase() || "";
+    senderName     = item.from?.displayName || "";
+    senderDomain   = senderEmail.split("@")[1] || "";
+    subject        = item.subject || "";
+    replyTo        = item.replyTo || [];
+    ccList         = item.cc     || [];
+    recipientEmail = Office.context.mailbox.userProfile.emailAddress?.toLowerCase() || "";
   }
+  // Extract recipient's domain so we never flag our own org as suspicious
+  const recipientDomain = recipientEmail.split("@")[1] || "";
 
   document.getElementById("safety-loading").style.display = "block";
   document.getElementById("safety-section").style.display = "none";
@@ -1029,9 +1039,9 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkFreeSubdomain(senderDomain)),                        // instant
       Promise.resolve(checkSubjectUrls(subject)),                               // instant
       Promise.resolve(checkDisplayNameDomainMismatch(senderName, senderDomain)), // instant - BEC detection
-      Promise.resolve(checkBodyEmailMismatch(senderDomain, bodyText)),            // instant - contact mismatch
-      Promise.resolve(checkBECLanguage(subject, bodyText)),                       // instant - urgency/BEC patterns
-      Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText)),              // instant - thread hijack detection
+      Promise.resolve(checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain)),  // instant - contact mismatch
+      Promise.resolve(checkBECLanguage(subject, bodyText)),                                  // instant - urgency/BEC patterns
+      Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText, recipientDomain)),       // instant - thread hijack detection
     ]);
 
     setSafetyStatus("");
@@ -1455,46 +1465,70 @@ function checkDisplayNameDomainMismatch(displayName, senderDomain) {
 }
 
 // ── CHECK 12: Email addresses in body that differ from sender (BEC) ───────────
-function checkBodyEmailMismatch(senderDomain, bodyText) {
+function checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain) {
+  recipientDomain = recipientDomain || "";
   if (!bodyText || bodyText.length < 10) {
     return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
       desc:"No body text available to analyze.", weight:0 };
   }
 
-  // Extract email addresses from body
+  // Strip quoted reply sections and header lines to avoid false positives
+  const cleanBody = bodyText
+    .split("\n")
+    .filter(line => {
+      const t = line.trim();
+      if (t.startsWith(">")) return false;
+      if (/^(From|To|Sent|CC|Cc|BCC|Subject|Date|Reply-To)\s*:/i.test(t)) return false;
+      if (/^[-_=]{5,}/.test(t)) return false;
+      return true;
+    })
+    .join("\n");
+
   const emailPattern = /[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
-  const matches = [...bodyText.matchAll(emailPattern)];
+  const matches = [...cleanBody.matchAll(emailPattern)];
 
   if (matches.length === 0) {
     return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
-      desc:"No email addresses found in message body.", weight:0 };
+      desc:"No contact email addresses found in message body.", weight:0 };
   }
 
-  // Find emails with different domains than the sender
+  // Build ignore list — never flag our own org or sender domain
+  const ignoreDomains = new Set([
+    'gmail.com','outlook.com','yahoo.com','microsoft.com','google.com',
+    'apple.com','unsubscribe.com','privacy.com','amazonses.com',
+    'sendgrid.net','mailchimp.com','constantcontact.com','hubspot.com',
+    senderDomain,
+    recipientDomain
+  ]);
+
   const foreignDomains = [...new Set(
-    matches
-      .map(m => m[1].toLowerCase())
-      .filter(d => d !== senderDomain && !d.endsWith('.' + senderDomain))
+    matches.map(m => m[1].toLowerCase())
+      .filter(d => !ignoreDomains.has(d) && !d.endsWith('.' + senderDomain))
   )];
 
-  // Filter out common legitimate domains (unsubscribe links, trackers, etc.)
-  const ignoreDomains = ['gmail.com','outlook.com','yahoo.com','microsoft.com',
-    'google.com','apple.com','unsubscribe.com','privacy.com'];
-  const suspiciousDomains = foreignDomains.filter(d => !ignoreDomains.includes(d));
+  // Only flag if there are explicit contact/redirect instructions nearby
+  const bodyLower = cleanBody.toLowerCase();
+  const contactTriggers = [
+    'contact me','reach me','reply to','email me','send to',
+    'contact details','contact information','reach out to',
+    'please email','kindly email','my email','personal email',
+    'use this email','new email','different email'
+  ];
+  const hasContactContext = contactTriggers.some(t => bodyLower.includes(t));
 
-  if (suspiciousDomains.length > 0) {
+  if (foreignDomains.length > 0 && hasContactContext) {
     return {
       name: "Body Contact Check",
       icon: "🚨",
       status: "fail",
       badge: "CONTACT MISMATCH",
-      desc: `Email body contains contact address(es) from different domain(s): ${suspiciousDomains.slice(0,2).join(', ')}. Sender is from "${senderDomain}" but asking you to reply elsewhere — classic BEC redirect.`,
+      desc: `Body contains redirect instructions to a different domain: ${foreignDomains.slice(0,2).join(', ')}. Sender is from "${senderDomain}" — classic BEC redirect tactic.`,
       weight: 40
     };
   }
 
   return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
-    desc:"All email addresses in body match the sender's domain.", weight:0 };
+    desc:"No suspicious contact redirects detected in message body.", weight:0 };
 }
 
 // ── CHECK 13: BEC / urgency language patterns ──────────────────────────────────
@@ -1555,7 +1589,8 @@ function checkBECLanguage(subject, bodyText) {
 
 
 // ── CHECK 14: CC list thread hijack / conversation injection detection ────────
-function checkCCHijack(senderDomain, ccList, bodyText) {
+function checkCCHijack(senderDomain, ccList, bodyText, recipientDomain) {
+  recipientDomain = recipientDomain || "";
   if (!ccList || ccList.length === 0) {
     return { name:"CC Recipients", icon:"✅", status:"pass", badge:"CLEAN",
       desc:"No CC recipients on this email.", weight:0 };
@@ -1582,7 +1617,8 @@ function checkCCHijack(senderDomain, ccList, bodyText) {
     const ccName   = (cc.displayName || "").toLowerCase();
 
     // Flag 1: Free provider in CC of what appears to be a corporate thread
-    if (freeProviders.has(ccDomain) && !freeProviders.has(senderDomain)) {
+    // Skip if it's the recipient's own domain
+    if (freeProviders.has(ccDomain) && !freeProviders.has(senderDomain) && ccDomain !== recipientDomain) {
       flags.push(`"${ccEmail}" — free email provider inserted into corporate thread`);
     }
 
@@ -1594,7 +1630,7 @@ function checkCCHijack(senderDomain, ccList, bodyText) {
     const ccTld      = ccDomain.split('.').slice(1).join('.');
 
     // Similar base domain but different TLD (communityhope-nj.org vs communityhope-nj.com)
-    if (senderBase === ccBase && senderTld !== ccTld && ccDomain !== senderDomain) {
+    if (senderBase === ccBase && senderTld !== ccTld && ccDomain !== senderDomain && ccDomain !== recipientDomain) {
       warnings.push(`"${ccEmail}" — same domain name as sender but different TLD (.${senderTld} vs .${ccTld})`);
     }
 
