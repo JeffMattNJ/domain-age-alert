@@ -594,13 +594,18 @@
         });
       } catch (_) { bodyText = ""; }
 
+      // Get CC recipients for thread hijack detection
+      let ccList = [];
+      try { ccList = item.cc || []; } catch (_) { ccList = []; }
+
       await runSafetyCheck(
         currentEmail,
         from.displayName || "",
         currentDomain,
         item.subject || "",
         item.replyTo || [],
-        bodyText
+        bodyText,
+        ccList
       );
 
       } catch (err) {
@@ -986,9 +991,10 @@ const LOOKALIKES = [
   { real:"dhl.com",            patterns:["dhl-","dhI.com","dh1.com"] },
 ];
 
-async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo, bodyText) {
+async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo, bodyText, ccList) {
   // Accept params from onReady (already loaded) or re-read from Office if called standalone
   bodyText = bodyText || "";
+  ccList   = ccList   || [];
   if (!senderEmail) {
     const item = Office.context.mailbox.item;
     senderEmail  = item.from?.emailAddress?.toLowerCase() || "";
@@ -996,6 +1002,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     senderDomain = senderEmail.split("@")[1] || "";
     subject      = item.subject || "";
     replyTo      = item.replyTo || [];
+    ccList       = item.cc     || [];
   }
 
   document.getElementById("safety-loading").style.display = "block";
@@ -1024,6 +1031,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkDisplayNameDomainMismatch(senderName, senderDomain)), // instant - BEC detection
       Promise.resolve(checkBodyEmailMismatch(senderDomain, bodyText)),            // instant - contact mismatch
       Promise.resolve(checkBECLanguage(subject, bodyText)),                       // instant - urgency/BEC patterns
+      Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText)),              // instant - thread hijack detection
     ]);
 
     setSafetyStatus("");
@@ -1543,6 +1551,119 @@ function checkBECLanguage(subject, bodyText) {
 
   return { name:"BEC Language Check", icon:"✅", status:"pass", badge:"CLEAR",
     desc:"No Business Email Compromise language patterns detected.", weight:0 };
+}
+
+
+// ── CHECK 14: CC list thread hijack / conversation injection detection ────────
+function checkCCHijack(senderDomain, ccList, bodyText) {
+  if (!ccList || ccList.length === 0) {
+    return { name:"CC Recipients", icon:"✅", status:"pass", badge:"CLEAN",
+      desc:"No CC recipients on this email.", weight:0 };
+  }
+
+  const flags = [];
+  const warnings = [];
+
+  // Known safe free providers — being CC'd from these in a corporate thread is suspicious
+  const freeProviders = new Set([
+    'gmail.com','yahoo.com','hotmail.com','outlook.com','aol.com',
+    'icloud.com','protonmail.com','mail.com','yandex.com','gmx.com'
+  ]);
+
+  // Collect all CC domains
+  const ccDomains = ccList
+    .map(r => (r.emailAddress || "").toLowerCase().split("@")[1])
+    .filter(Boolean);
+
+  // Check each CC recipient
+  for (const cc of ccList) {
+    const ccEmail  = (cc.emailAddress || "").toLowerCase();
+    const ccDomain = ccEmail.split("@")[1] || "";
+    const ccName   = (cc.displayName || "").toLowerCase();
+
+    // Flag 1: Free provider in CC of what appears to be a corporate thread
+    if (freeProviders.has(ccDomain) && !freeProviders.has(senderDomain)) {
+      flags.push(`"${ccEmail}" — free email provider inserted into corporate thread`);
+    }
+
+    // Flag 2: CC domain is a lookalike of the sender domain
+    // Check for slight variations (extra chars, hyphen variations, TLD swaps)
+    const senderBase = senderDomain.split('.')[0];
+    const ccBase     = ccDomain.split('.')[0];
+    const senderTld  = senderDomain.split('.').slice(1).join('.');
+    const ccTld      = ccDomain.split('.').slice(1).join('.');
+
+    // Similar base domain but different TLD (communityhope-nj.org vs communityhope-nj.com)
+    if (senderBase === ccBase && senderTld !== ccTld && ccDomain !== senderDomain) {
+      warnings.push(`"${ccEmail}" — same domain name as sender but different TLD (.${senderTld} vs .${ccTld})`);
+    }
+
+    // Levenshtein-like check: domain is very similar to sender (1-2 char difference)
+    if (ccDomain !== senderDomain && ccDomain.length > 4) {
+      let diffs = 0;
+      const minLen = Math.min(senderDomain.length, ccDomain.length);
+      const maxLen = Math.max(senderDomain.length, ccDomain.length);
+      if (Math.abs(senderDomain.length - ccDomain.length) <= 2) {
+        for (let i = 0; i < minLen; i++) {
+          if (senderDomain[i] !== ccDomain[i]) diffs++;
+        }
+        diffs += maxLen - minLen;
+        if (diffs <= 2 && diffs > 0) {
+          warnings.push(`"${ccEmail}" — domain is very similar to sender domain "${senderDomain}" (possible lookalike)`);
+        }
+      }
+    }
+
+    // Flag 3: Check if this CC address also appears in the body with contact instructions
+    // (someone inserted their address AND put it in the body as a contact)
+    if (bodyText) {
+      const bodyLower = bodyText.toLowerCase();
+      const ccEmailInBody = bodyLower.includes(ccEmail);
+      const contactContext = ['contact me','reach me','reply to','email me',
+        'contact details','send to'].some(t => bodyLower.includes(t));
+      if (ccEmailInBody && contactContext && ccDomain !== senderDomain) {
+        flags.push(`"${ccEmail}" — CC'd AND listed as a contact in the body. Possible thread injection.`);
+      }
+    }
+  }
+
+  // Remove duplicates
+  const uniqueFlags    = [...new Set(flags)];
+  const uniqueWarnings = [...new Set(warnings)];
+
+  if (uniqueFlags.length > 0) {
+    return {
+      name: "CC Recipients",
+      icon: "🚨",
+      status: "fail",
+      badge: "SUSPICIOUS CC",
+      desc: `Suspicious CC recipient(s) detected: ${uniqueFlags[0]}${uniqueFlags.length > 1 ? ` (+${uniqueFlags.length-1} more)` : ''}`,
+      weight: 35
+    };
+  }
+
+  if (uniqueWarnings.length > 0) {
+    return {
+      name: "CC Recipients",
+      icon: "⚠️",
+      status: "warn",
+      badge: "CC CAUTION",
+      desc: `CC list has a potentially suspicious recipient: ${uniqueWarnings[0]}`,
+      weight: 15
+    };
+  }
+
+  // Show CC count as info so users can see who's copied
+  const ccSummary = ccList.slice(0,3).map(r => r.emailAddress).join(', ');
+  const more = ccList.length > 3 ? ` (+${ccList.length - 3} more)` : '';
+  return {
+    name: "CC Recipients",
+    icon: "✅",
+    status: "pass",
+    badge: "LOOKS OK",
+    desc: `${ccList.length} CC recipient(s) — all appear consistent with sender domain. ${ccSummary}${more}`,
+    weight: 0
+  };
 }
 
 // ── Render safety percentage circle ─────────────────────────────────────────
