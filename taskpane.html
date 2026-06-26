@@ -1038,10 +1038,11 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkNumberSubstitution(senderDomain)),                   // instant
       Promise.resolve(checkFreeSubdomain(senderDomain)),                        // instant
       Promise.resolve(checkSubjectUrls(subject)),                               // instant
-      Promise.resolve(checkDisplayNameDomainMismatch(senderName, senderDomain)), // instant - BEC detection
+      Promise.resolve(checkDisplayNameDomainMismatch(senderName, senderDomain, senderEmail)), // instant - BEC detection
       Promise.resolve(checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain)),  // instant - contact mismatch
       Promise.resolve(checkBECLanguage(subject, bodyText)),                                  // instant - urgency/BEC patterns
-      Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText, recipientDomain)),       // instant - thread hijack detection
+      Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText, recipientDomain)),
+      Promise.resolve(checkFinancialRequest(subject, bodyText)),       // instant - thread hijack detection
     ]);
 
     setSafetyStatus("");
@@ -1413,55 +1414,103 @@ function checkSubjectUrls(subject, cachedResults) {
 
 
 // ── CHECK 11: Display name vs sender domain mismatch (BEC detection) ─────────
-function checkDisplayNameDomainMismatch(displayName, senderDomain) {
+function checkDisplayNameDomainMismatch(displayName, senderDomain, senderEmail) {
+  senderEmail = (senderEmail || "").toLowerCase();
   if (!displayName) {
     return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
       desc:"No display name to analyze.", weight:0 };
   }
 
-  const nameLower = displayName.toLowerCase();
+  const nameLower  = displayName.toLowerCase().trim();
+  const domainBase = senderDomain.split(".")[0].toLowerCase();
 
-  // Company suffix indicators — if name looks like a company
+  // ── Part 1: Company name impersonation ───────────────────────────────────────
   const companySuffixes = [
     "group","corp","corporation","inc","incorporated","llc","ltd","limited",
     "co","company","associates","partners","solutions","services","systems",
     "technologies","tech","global","international","enterprises","holdings",
     "consulting","advisors","management","capital","bank","financial"
   ];
+  const stopWords = new Set([...companySuffixes,"the","and","of","for","a","an"]);
+  const looksLikeCompany = companySuffixes.some(s => nameLower.includes(" "+s) || nameLower.endsWith(s));
 
-  const looksLikeCompany = companySuffixes.some(s => nameLower.includes(" " + s) || nameLower.endsWith(s));
-
-  if (!looksLikeCompany) {
+  if (looksLikeCompany) {
+    const nameWords = nameLower.split(/[\s,.-]+/).filter(w => w.length > 2 && !stopWords.has(w));
+    const domainMatches = nameWords.some(w => domainBase.includes(w) || w.includes(domainBase));
+    if (!domainMatches && nameWords.length > 0) {
+      return {
+        name:"Display Name Check", icon:"🚨", status:"fail", badge:"COMPANY MISMATCH",
+        desc:`"${displayName}" looks like a company name but the email comes from "${senderDomain}" — unrelated domain. Top sign of Business Email Compromise.`,
+        weight:45
+      };
+    }
     return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
-      desc:`"${displayName}" does not appear to be a company name impersonation.`, weight:0 };
+      desc:`Company name "${displayName}" is consistent with sender domain.`, weight:0 };
   }
 
-  // Extract key words from display name (skip common suffixes)
-  const stopWords = new Set([...companySuffixes, "the","and","of","for","a","an"]);
-  const nameWords = nameLower.split(/[\s,.-]+/).filter(w => w.length > 2 && !stopWords.has(w));
+  // ── Part 2: Personal name vs username check ───────────────────────────────────
+  // Extract the username (part before @) from the sender email
+  // e.g. "helenadebanjo19@gmail.com" → username = "helenadebanjo19"
+  // e.g. "MFerreira-Pych@communityhope-nj.org" → username = "MFerreira-Pych"
+  // e.g. "jeffreyc@mattnj.com" → username = "jeffreyc"
+  const username = senderEmail.split("@")[0] || "";
 
-  if (nameWords.length === 0) {
-    return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
-      desc:"Display name analyzed — no mismatch detected.", weight:0 };
-  }
+  // Generic/role usernames that tell us nothing about the person's identity
+  const genericUsernames = new Set([
+    "hello","info","contact","support","admin","noreply","no-reply",
+    "mail","email","team","office","help","sales","billing","accounts",
+    "service","enquiries","enquiry","hi","hey","notifications","alerts",
+    "donotreply","do-not-reply","postmaster","webmaster","reception"
+  ]);
 
-  // Check if any key name word appears in the sender domain
-  const domainBase = senderDomain.split('.')[0].toLowerCase();
-  const domainMatches = nameWords.some(word => domainBase.includes(word) || word.includes(domainBase));
+  // Extract first and last name parts from display name
+  const nameParts = nameLower.split(/\s+/).filter(p => p.length > 1);
 
-  if (!domainMatches) {
+  // If the username is generic — we can't confirm identity from it
+  if (genericUsernames.has(username.replace(/[0-9._-]/g, ""))) {
+    // Generic username with a personal display name — can't verify identity
+    // Only flag if it's a free provider (where username IS the identifier)
+    const freeProviders = new Set(["gmail.com","yahoo.com","hotmail.com","aol.com",
+      "icloud.com","protonmail.com","mail.com","yandex.com","gmx.com"]);
+    if (!freeProviders.has(senderDomain)) {
+      return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
+        desc:`"${displayName}" uses a generic email address (${username}@). This is normal for shared/role addresses.`, weight:0 };
+    }
     return {
-      name: "Display Name Check",
-      icon: "🚨",
-      status: "fail",
-      badge: "NAME MISMATCH",
-      desc: `Display name "${displayName}" appears to be a company but email is from "${senderDomain}" — a completely unrelated domain. This is the #1 sign of Business Email Compromise (BEC).`,
-      weight: 45
+      name:"Display Name Check", icon:"⚠️", status:"warn", badge:"UNVERIFIABLE",
+      desc:`Display name "${displayName}" cannot be verified — username "${username}" is a generic address with no personal identifier.`,
+      weight:10
     };
   }
 
-  return { name:"Display Name Check", icon:"✅", status:"pass", badge:"MATCHES",
-    desc:`Display name "${displayName}" is consistent with sender domain "${senderDomain}".`, weight:0 };
+  // Clean the username for comparison — remove numbers and special chars
+  // "helenadebanjo19" → "helenadebanjo"
+  // "MFerreira-Pych"  → "mferreiraypych" → check for "ferreira" and "pych"
+  const usernameClean = username.toLowerCase().replace(/[0-9._-]/g, "");
+
+  // Check if ANY part of the display name appears in the username or vice versa
+  const nameMatchesUsername = nameParts.some(part =>
+    part.length > 2 && (
+      usernameClean.includes(part) ||    // "jeffrey" in "jeffreyc" ✅
+      part.includes(usernameClean) ||    // reverse
+      usernameClean.startsWith(part.slice(0,3))  // "mar" matches "mferreira" ✅
+    )
+  );
+
+  if (!nameMatchesUsername && nameParts.length >= 2) {
+    // Username and display name share nothing — flag it
+    const freeProviders = new Set(["gmail.com","yahoo.com","hotmail.com","aol.com",
+      "icloud.com","protonmail.com","mail.com","yandex.com","gmx.com"]);
+    const weight = freeProviders.has(senderDomain) ? 20 : 12;
+    return {
+      name:"Display Name Check", icon:"⚠️", status:"warn", badge:"NAME MISMATCH",
+      desc:`Display name "${displayName}" doesn't match the username "${username}" — they appear unrelated. Confirm you know this sender before responding.`,
+      weight
+    };
+  }
+
+  return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
+    desc:`Display name "${displayName}" is consistent with username "${username}".`, weight:0 };
 }
 
 // ── CHECK 12: Email addresses in body that differ from sender (BEC) ───────────
@@ -1699,6 +1748,53 @@ function checkCCHijack(senderDomain, ccList, bodyText, recipientDomain) {
     badge: "LOOKS OK",
     desc: `${ccList.length} CC recipient(s) — all appear consistent with sender domain. ${ccSummary}${more}`,
     weight: 0
+  };
+}
+
+
+// ── FINANCIAL REQUEST CHECK (advisory, weight=5) ──────────────────────────────
+function checkFinancialRequest(subject, bodyText) {
+  const combined = ((subject || "") + " " + (bodyText || "")).toLowerCase();
+  if (combined.length < 10) {
+    return { name:"Financial Request", icon:"✅", status:"pass", badge:"NONE DETECTED",
+      desc:"No financial request language detected.", weight:0 };
+  }
+
+  const financialPatterns = [
+    // Direct deposit / payroll
+    "direct deposit","change my direct deposit","update direct deposit",
+    "update my bank","change my bank","new bank account","bank account change",
+    "banking information","bank details","bank info","new account number",
+    "routing number","account number","payroll update","paycheck deposit",
+    // Wire transfer
+    "wire transfer","wire funds","wire the","send wire","initiate a wire",
+    // ACH
+    "ach transfer","ach payment","ach deposit",
+    // General financial
+    "transfer funds","transfer money","send funds","send money",
+    "payment information","payment details","billing information",
+    "update payment","change payment","new payment method",
+    // Invoice / vendor fraud
+    "updated invoice","new invoice","revised invoice",
+    "vendor payment","supplier payment","change of payment",
+    // Gift card fraud
+    "gift card","itunes card","google play card","amazon card","buy cards",
+  ];
+
+  const found = financialPatterns.filter(p => combined.includes(p));
+
+  if (found.length === 0) {
+    return { name:"Financial Request", icon:"✅", status:"pass", badge:"NONE DETECTED",
+      desc:"No financial request language detected.", weight:0 };
+  }
+
+  return {
+    name: "Financial Request",
+    icon: "🏦",
+    status: "warn",
+    badge: "FINANCIAL REQUEST",
+    desc: `This email contains financial request language: "${found.slice(0,2).join('", "')}". Never update payment or banking details based on an email alone — call the sender on a known number to verify first.`,
+    weight: 5
   };
 }
 
