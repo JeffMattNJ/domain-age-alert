@@ -410,72 +410,8 @@
   </div>
 
   <div id="main-content">
-    <div id="alert-banner">
-      <div class="alert-header">
-        <span class="alert-icon" id="alert-icon"></span>
-        <span class="alert-title" id="alert-title"></span>
-      </div>
-      <div class="alert-body" id="alert-body"></div>
-    </div>
 
-    <div class="info-card">
-      <div class="info-row">
-        <span class="info-label">Sender</span>
-        <span class="info-value" id="info-sender">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Domain</span>
-        <span class="info-value" id="info-domain">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Registered</span>
-        <span class="info-value" id="info-registered">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Domain Age</span>
-        <span class="info-value" id="info-age">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Registrar</span>
-        <span class="info-value" id="info-registrar">—</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Risk Level</span>
-        <span class="info-value"><span class="badge" id="info-risk">—</span></span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Data Source</span>
-        <span class="info-value" id="info-source">—</span>
-      </div>
-    </div>
-
-    <div class="tips-section" id="tips-section" style="display:none;">
-      <div class="tips-title">⚡ What to watch for</div>
-      <div class="tip"><div class="tip-dot"></div>Do not click links or download attachments from this email.</div>
-      <div class="tip"><div class="tip-dot"></div>Verify the sender through a separate, known channel before responding.</div>
-      <div class="tip"><div class="tip-dot"></div>Newly registered domains are a top indicator of phishing campaigns.</div>
-      <div class="tip"><div class="tip-dot"></div>Report this email as phishing if it requests personal or financial information.</div>
-    </div>
-
-    <button class="refresh-btn" onclick="retryLookup(true)">↺ Refresh (bypass cache)</button>
-  </div>
-
-
-    <!-- Safety loading indicator (auto-runs) -->
-    <div id="safety-loading" style="display:none;">
-      <div class="mini-spinner"></div>
-      Running safety checks…<br>
-      <span id="safety-status" style="font-size:10px;color:var(--muted)"></span>
-    </div>
-
-    <!-- Alert line -->
-    <div id="alert-line">
-      <span class="alert-prefix" id="alert-prefix"></span>
-      <span class="alert-reason" id="alert-reason"></span>
-    </div>
-
-
-    <!-- Safety percentage rating -->
+    <!-- ① SAFETY CIRCLE — shown first after analysis (most impactful) -->
     <div class="safety-rating-wrap" id="safety-rating" style="display:none;">
       <div class="circle-gauge">
         <svg viewBox="0 0 90 90">
@@ -507,8 +443,73 @@
       </div>
     </div>
 
-    <!-- Full safety check results -->
-    <div id="safety-section">
+    <!-- ② ALERT LINE — plain English reason shown right under circle -->
+    <div id="alert-line">
+      <span class="alert-prefix" id="alert-prefix"></span>
+      <span class="alert-reason" id="alert-reason"></span>
+    </div>
+
+    <!-- ③ DOMAIN AGE BANNER — verdict from domain age check -->
+    <div id="alert-banner">
+      <div class="alert-header">
+        <span class="alert-icon" id="alert-icon"></span>
+        <span class="alert-title" id="alert-title"></span>
+      </div>
+      <div class="alert-body" id="alert-body"></div>
+    </div>
+
+    <!-- ④ EMAIL DETAILS CARD -->
+    <div class="info-card">
+      <div class="info-row">
+        <span class="info-label">Sender</span>
+        <span class="info-value" id="info-sender">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Domain</span>
+        <span class="info-value" id="info-domain">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Registered</span>
+        <span class="info-value" id="info-registered">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Domain Age</span>
+        <span class="info-value" id="info-age">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Registrar</span>
+        <span class="info-value" id="info-registrar">—</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Risk Level</span>
+        <span class="info-value"><span class="badge" id="info-risk">—</span></span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Data Source</span>
+        <span class="info-value" id="info-source">—</span>
+      </div>
+    </div>
+
+    <!-- ⑤ PHISHING TIPS (only shown for high risk domains) -->
+    <div class="tips-section" id="tips-section" style="display:none;">
+      <div class="tips-title">⚡ What to watch for</div>
+      <div class="tip"><div class="tip-dot"></div>Do not click links or download attachments from this email.</div>
+      <div class="tip"><div class="tip-dot"></div>Verify the sender through a separate, known channel before responding.</div>
+      <div class="tip"><div class="tip-dot"></div>Newly registered domains are a top indicator of phishing campaigns.</div>
+      <div class="tip"><div class="tip-dot"></div>Report this email as phishing if it requests personal or financial information.</div>
+    </div>
+
+    <button class="refresh-btn" onclick="retryLookup(true)">↺ Refresh (bypass cache)</button>
+
+    <!-- ⑥ SAFETY LOADING SPINNER -->
+    <div id="safety-loading" style="display:none;">
+      <div class="mini-spinner"></div>
+      Running safety checks…<br>
+      <span id="safety-status" style="font-size:10px;color:var(--muted)"></span>
+    </div>
+
+    <!-- ⑦ FULL SAFETY CHECK RESULTS — flags sorted red first -->
+    <div id="safety-section" style="display:none;">
       <div class="safety-title">Safety Check Results</div>
       <div class="score-wrap">
         <div class="score-label-row">
@@ -519,8 +520,7 @@
       <div id="checks-container"></div>
     </div>
 
-
-    <!-- User guidance section -->
+    <!-- ⑧ USER GUIDANCE -->
     <div class="guidance-box" id="guidance-box" style="display:none;">
       <div class="guidance-title">💬 What should I do?</div>
       <div class="guidance-item">
@@ -540,7 +540,7 @@
       </div>
     </div>
 
-    <!-- Legal disclaimer -->
+    <!-- ⑨ LEGAL DISCLAIMER -->
     <div class="disclaimer">
       <strong>Disclaimer:</strong> Is This Legit? is an automated analysis tool designed to assist users
       in evaluating email indicators. It does not guarantee that any email is safe or malicious.
@@ -549,6 +549,8 @@
       judgment. Your organization is not liable for actions taken based solely on this tool's output.
       If in doubt, contact your IT or security team before acting on any suspicious email.
     </div>
+
+  </div>
 
   <footer>Is This Legit? · for Microsoft Outlook</footer>
 
