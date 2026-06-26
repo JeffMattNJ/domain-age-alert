@@ -582,12 +582,23 @@
         await runLookup(currentDomain, false);
 
       // Auto-run full safety analysis immediately after domain age loads
+      // Get email body text for deeper BEC/phishing analysis
+      let bodyText = "";
+      try {
+        bodyText = await new Promise((resolve) => {
+          item.body.getAsync(Office.CoercionType.Text, { asyncContext: "" }, (result) => {
+            resolve(result.status === Office.AsyncResultStatus.Succeeded ? result.value || "" : "");
+          });
+        });
+      } catch (_) { bodyText = ""; }
+
       await runSafetyCheck(
         currentEmail,
         from.displayName || "",
         currentDomain,
         item.subject || "",
-        item.replyTo || []
+        item.replyTo || [],
+        bodyText
       );
 
       } catch (err) {
@@ -973,8 +984,9 @@ const LOOKALIKES = [
   { real:"dhl.com",            patterns:["dhl-","dhI.com","dh1.com"] },
 ];
 
-async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo) {
+async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo, bodyText) {
   // Accept params from onReady (already loaded) or re-read from Office if called standalone
+  bodyText = bodyText || "";
   if (!senderEmail) {
     const item = Office.context.mailbox.item;
     senderEmail  = item.from?.emailAddress?.toLowerCase() || "";
@@ -1007,6 +1019,9 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkNumberSubstitution(senderDomain)),                   // instant
       Promise.resolve(checkFreeSubdomain(senderDomain)),                        // instant
       Promise.resolve(checkSubjectUrls(subject)),                               // instant
+      Promise.resolve(checkDisplayNameDomainMismatch(senderName, senderDomain)), // instant - BEC detection
+      Promise.resolve(checkBodyEmailMismatch(senderDomain, bodyText)),            // instant - contact mismatch
+      Promise.resolve(checkBECLanguage(subject, bodyText)),                       // instant - urgency/BEC patterns
     ]);
 
     setSafetyStatus("");
@@ -1375,6 +1390,158 @@ function checkSubjectUrls(subject, cachedResults) {
     desc:`Found ${matches.length} URL(s) in subject — no suspicious domains detected.`, weight:0 };
 }
 
+
+
+// ── CHECK 11: Display name vs sender domain mismatch (BEC detection) ─────────
+function checkDisplayNameDomainMismatch(displayName, senderDomain) {
+  if (!displayName) {
+    return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
+      desc:"No display name to analyze.", weight:0 };
+  }
+
+  const nameLower = displayName.toLowerCase();
+
+  // Company suffix indicators — if name looks like a company
+  const companySuffixes = [
+    "group","corp","corporation","inc","incorporated","llc","ltd","limited",
+    "co","company","associates","partners","solutions","services","systems",
+    "technologies","tech","global","international","enterprises","holdings",
+    "consulting","advisors","management","capital","bank","financial"
+  ];
+
+  const looksLikeCompany = companySuffixes.some(s => nameLower.includes(" " + s) || nameLower.endsWith(s));
+
+  if (!looksLikeCompany) {
+    return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
+      desc:`"${displayName}" does not appear to be a company name impersonation.`, weight:0 };
+  }
+
+  // Extract key words from display name (skip common suffixes)
+  const stopWords = new Set([...companySuffixes, "the","and","of","for","a","an"]);
+  const nameWords = nameLower.split(/[\s,.-]+/).filter(w => w.length > 2 && !stopWords.has(w));
+
+  if (nameWords.length === 0) {
+    return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
+      desc:"Display name analyzed — no mismatch detected.", weight:0 };
+  }
+
+  // Check if any key name word appears in the sender domain
+  const domainBase = senderDomain.split('.')[0].toLowerCase();
+  const domainMatches = nameWords.some(word => domainBase.includes(word) || word.includes(domainBase));
+
+  if (!domainMatches) {
+    return {
+      name: "Display Name Check",
+      icon: "🚨",
+      status: "fail",
+      badge: "NAME MISMATCH",
+      desc: `Display name "${displayName}" appears to be a company but email is from "${senderDomain}" — a completely unrelated domain. This is the #1 sign of Business Email Compromise (BEC).`,
+      weight: 45
+    };
+  }
+
+  return { name:"Display Name Check", icon:"✅", status:"pass", badge:"MATCHES",
+    desc:`Display name "${displayName}" is consistent with sender domain "${senderDomain}".`, weight:0 };
+}
+
+// ── CHECK 12: Email addresses in body that differ from sender (BEC) ───────────
+function checkBodyEmailMismatch(senderDomain, bodyText) {
+  if (!bodyText || bodyText.length < 10) {
+    return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
+      desc:"No body text available to analyze.", weight:0 };
+  }
+
+  // Extract email addresses from body
+  const emailPattern = /[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
+  const matches = [...bodyText.matchAll(emailPattern)];
+
+  if (matches.length === 0) {
+    return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
+      desc:"No email addresses found in message body.", weight:0 };
+  }
+
+  // Find emails with different domains than the sender
+  const foreignDomains = [...new Set(
+    matches
+      .map(m => m[1].toLowerCase())
+      .filter(d => d !== senderDomain && !d.endsWith('.' + senderDomain))
+  )];
+
+  // Filter out common legitimate domains (unsubscribe links, trackers, etc.)
+  const ignoreDomains = ['gmail.com','outlook.com','yahoo.com','microsoft.com',
+    'google.com','apple.com','unsubscribe.com','privacy.com'];
+  const suspiciousDomains = foreignDomains.filter(d => !ignoreDomains.includes(d));
+
+  if (suspiciousDomains.length > 0) {
+    return {
+      name: "Body Contact Check",
+      icon: "🚨",
+      status: "fail",
+      badge: "CONTACT MISMATCH",
+      desc: `Email body contains contact address(es) from different domain(s): ${suspiciousDomains.slice(0,2).join(', ')}. Sender is from "${senderDomain}" but asking you to reply elsewhere — classic BEC redirect.`,
+      weight: 40
+    };
+  }
+
+  return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
+    desc:"All email addresses in body match the sender's domain.", weight:0 };
+}
+
+// ── CHECK 13: BEC / urgency language patterns ──────────────────────────────────
+function checkBECLanguage(subject, bodyText) {
+  const combined = ((subject || "") + " " + (bodyText || "")).toLowerCase();
+
+  if (combined.length < 10) {
+    return { name:"BEC Language Check", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
+  }
+
+  // BEC-specific language patterns (different from generic phishing keywords)
+  const becPatterns = [
+    // Urgency + vagueness
+    "urgent inquiry","urgent requirement","urgent request","urgent matter",
+    "kindly advise","kindly confirm","kindly revert","at your earliest convenience",
+    "prompt response","as soon as possible","asap","time sensitive",
+    // Wire transfer / financial BEC
+    "wire transfer","bank transfer","change of account","new bank details",
+    "updated banking","payment details have changed","new account number",
+    "transfer funds","remit payment","remittance",
+    // Authority impersonation
+    "on behalf of","writing on behalf","our subsidiary","newly initiated",
+    "recognized expertise","significant value","mutual benefit",
+    // Isolation tactics
+    "keep this confidential","do not discuss","between us","privately",
+    "do not reply to this email","contact me directly","use this number",
+    // Gift card / executive fraud
+    "gift card","itunes card","google play","buy cards","need a favor",
+    "available right now","are you available","can you help me with something",
+  ];
+
+  const found = becPatterns.filter(p => combined.includes(p));
+
+  if (found.length >= 3) {
+    return {
+      name: "BEC Language Check",
+      icon: "🚨",
+      status: "fail",
+      badge: "HIGH BEC RISK",
+      desc: `${found.length} Business Email Compromise patterns detected: "${found.slice(0,3).join('", "')}"`,
+      weight: 35
+    };
+  }
+  if (found.length >= 1) {
+    return {
+      name: "BEC Language Check",
+      icon: "⚠️",
+      status: "warn",
+      badge: "BEC LANGUAGE",
+      desc: `BEC language pattern detected: "${found[0]}". Common in impersonation and fraud emails.`,
+      weight: 15
+    };
+  }
+
+  return { name:"BEC Language Check", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No Business Email Compromise language patterns detected.", weight:0 };
+}
 
 // ── Render safety percentage circle ─────────────────────────────────────────
 function renderSafetyCircle(safeScore, results, bannerClass) {
