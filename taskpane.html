@@ -1666,17 +1666,8 @@ function checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain) {
       desc:"No body text available to analyze.", weight:0 };
   }
 
-  // Strip quoted reply sections and header lines to avoid false positives
-  const cleanBody = bodyText
-    .split("\n")
-    .filter(line => {
-      const t = line.trim();
-      if (t.startsWith(">")) return false;
-      if (/^(From|To|Sent|CC|Cc|BCC|Subject|Date|Reply-To)\s*:/i.test(t)) return false;
-      if (/^[-_=]{5,}/.test(t)) return false;
-      return true;
-    })
-    .join("\n");
+  // Use full body cleaner — strips signatures, CAUTION banners, quoted replies
+  const cleanBody = cleanBodyForAnalysis(bodyText);
 
   const emailPattern = /[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
   const matches = [...cleanBody.matchAll(emailPattern)];
@@ -1727,7 +1718,8 @@ function checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain) {
 
 // ── CHECK 13: BEC / urgency language patterns ──────────────────────────────────
 function checkBECLanguage(subject, bodyText) {
-  const combined = ((subject || "") + " " + (bodyText || "")).toLowerCase();
+  const cleanBody = cleanBodyForAnalysis(bodyText);
+  const combined  = ((subject || "") + " " + cleanBody).toLowerCase();
 
   if (combined.length < 10) {
     return { name:"BEC Language Check", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
@@ -1899,7 +1891,8 @@ function checkCCHijack(senderDomain, ccList, bodyText, recipientDomain) {
 
 // ── FINANCIAL REQUEST CHECK (advisory, weight=5) ──────────────────────────────
 function checkFinancialRequest(subject, bodyText) {
-  const combined = ((subject || "") + " " + (bodyText || "")).toLowerCase();
+  const cleanBody = cleanBodyForAnalysis(bodyText);
+  const combined  = ((subject || "") + " " + cleanBody).toLowerCase();
   if (combined.length < 10) {
     return { name:"Financial Request", icon:"✅", status:"pass", badge:"NONE DETECTED",
       desc:"No financial request language detected.", weight:0 };
@@ -1974,6 +1967,75 @@ function checkOrgImpersonation(subject, bodyText, senderDomain, recipientDomain)
 // ══════════════════════════════════════════════════════════════════════════════
 // NEW CHECK FUNCTIONS
 // ══════════════════════════════════════════════════════════════════════════════
+
+// ── Helper: clean email body for analysis (strips signatures, banners, quotes) ─
+function cleanBodyForAnalysis(bodyText) {
+  if (!bodyText) return "";
+
+  const lines = bodyText.split("\n");
+  const cleanLines = [];
+  let inSignature = false;
+  let inQuotedBlock = false;
+  let consecutiveBlankLines = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line    = lines[i];
+    const trimmed = line.trim();
+
+    // Skip quoted reply lines (starts with >)
+    if (trimmed.startsWith(">")) { inQuotedBlock = true; continue; }
+
+    // Skip reply header lines
+    if (/^(From|To|Sent|CC|Cc|Subject|Date|Reply-To)\s*:/i.test(trimmed)) { continue; }
+
+    // Skip injected security banners
+    if (/CAUTION.*External/i.test(trimmed)) { continue; }
+    if (/\*\*\s*External\s*\*\*/i.test(trimmed)) { continue; }
+    if (/careful w\/ links/i.test(trimmed)) { continue; }
+
+    // Detect start of email signature block
+    // Signatures typically contain: title lines, phone numbers, org names, URLs
+    // after a name line following a blank line
+    if (!inSignature) {
+      // Phone number pattern = likely in signature
+      if (/T:\s*[\d-()]+\s*(Ext|x)?\s*[\d]*/i.test(trimmed) ||
+          /C:\s*[\d-()]+/i.test(trimmed) ||
+          /^\+?[\d\s\-().]{10,}$/.test(trimmed)) {
+        inSignature = true; continue;
+      }
+      // Common signature title patterns — only skip if on its own line
+      if (/^(CEO|CFO|COO|CTO|President|Vice President|Executive Director|Chief Financial Officer|Chief Executive|Managing Director|Director|Manager|Coordinator|Associate Director)/i.test(trimmed) &&
+          trimmed.length < 60) {
+        inSignature = true; continue;
+      }
+      // URL-only line = likely signature
+      if (/^https?:\/\/[^\s]+$/.test(trimmed)) { continue; }
+      // "Our mission is..." type lines
+      if (/^our mission/i.test(trimmed)) { inSignature = true; continue; }
+    }
+
+    if (inSignature) {
+      // Once in signature, keep skipping until we hit a clearly new message
+      // A new message starts with "From:" or "-----" separator
+      if (/^From:/i.test(trimmed) || /^[-=]{5,}/.test(trimmed)) {
+        inSignature = false; inQuotedBlock = false;
+      }
+      continue;
+    }
+
+    // Track blank lines — too many consecutive = likely separator between messages
+    if (trimmed === "") {
+      consecutiveBlankLines++;
+      if (consecutiveBlankLines > 3) continue;
+    } else {
+      consecutiveBlankLines = 0;
+    }
+
+    cleanLines.push(line);
+  }
+
+  return cleanLines.join("\n").trim();
+}
 
 // ── Helper: parse Authentication-Results header ───────────────────────────────
 function parseAuthResults(headers) {
@@ -2158,7 +2220,8 @@ function checkAttachments(attachments, bodyText) {
 
 // ── CHECK: Credential harvesting phrases ──────────────────────────────────────
 function checkCredentialHarvesting(subject, bodyText) {
-  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  const cleanBody = cleanBodyForAnalysis(bodyText);
+  const combined  = ((subject||"") + " " + cleanBody).toLowerCase();
   if (combined.length < 10) return { name:"Credential Harvesting", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
 
   const patterns = [
@@ -2193,7 +2256,8 @@ function checkCredentialHarvesting(subject, bodyText) {
 
 // ── CHECK: Gift card / crypto / peer-to-peer ──────────────────────────────────
 function checkGiftCardCrypto(subject, bodyText) {
-  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  const cleanBody = cleanBodyForAnalysis(bodyText);
+  const combined  = ((subject||"") + " " + cleanBody).toLowerCase();
   if (combined.length < 10) return { name:"Gift Card / Crypto", icon:"✅", status:"pass", badge:"NONE", desc:"No content to analyze.", weight:0 };
   const patterns = [
     "gift card","itunes card","google play card","amazon gift card","steam card",
@@ -2214,12 +2278,19 @@ function checkGiftCardCrypto(subject, bodyText) {
 
 // ── CHECK: Urgency + secrecy + authority triple combo ─────────────────────────
 function checkUrgencySecrecyAuthority(subject, bodyText) {
-  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  // Use cleaned body — strips signatures, CAUTION banners, quoted replies
+  // so "Chief Financial Officer" in a signature doesn't trigger authority
+  // and "end of day" in an IT response doesn't trigger urgency
+  const cleanBody = cleanBodyForAnalysis(bodyText);
+  const combined  = ((subject||"") + " " + cleanBody).toLowerCase();
   if (combined.length < 10) return { name:"BEC Triple Signal", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
 
-  const urgency   = ["urgent","immediately","right away","asap","time sensitive","today only","by end of day","eod","before close","deadline","right now"];
-  const secrecy   = ["do not discuss","keep this between us","don't mention","confidential","do not forward","do not call","handle privately","between us","discreetly","do not share"];
-  const authority = ["ceo","president","executive","director","vp of","chief","i need you to","on my behalf","acting on behalf","as your manager","as your supervisor","this is urgent from"];
+  // Urgency: requires active request framing, not just time references
+  const urgency   = ["please do this now","handle this immediately","do this right away","asap please","time sensitive request","today only","needs to be done today","before close of business","this is urgent","urgent request","urgent action required","right now please"];
+  // Secrecy: explicit instructions to hide the action
+  const secrecy   = ["do not discuss","keep this between us","don't mention this","do not forward","do not call anyone","handle privately","don't tell anyone","between us only","do not share this","keep this confidential"];
+  // Authority: first-person commands from leadership, NOT signatures
+  const authority = ["i need you to","i want you to","as your ceo","as your president","on behalf of the ceo","acting ceo","i am your manager","as your supervisor","this is urgent from me","do this for me","i am asking you to","per my request","at my direction"];
 
   const hasUrgency   = urgency.some(p => combined.includes(p));
   const hasSecrecy   = secrecy.some(p => combined.includes(p));
