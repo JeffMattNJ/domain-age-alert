@@ -598,6 +598,20 @@
       let ccList = [];
       try { ccList = item.cc || []; } catch (_) { ccList = []; }
 
+      // Get internet headers (SPF/DKIM/DMARC/compauth/SCL/BCL/thread integrity)
+      let internetHeaders = "";
+      try {
+        internetHeaders = await new Promise((resolve) => {
+          item.getAllInternetHeadersAsync((result) => {
+            resolve(result.status === Office.AsyncResultStatus.Succeeded ? result.value || "" : "");
+          });
+        });
+      } catch (_) { internetHeaders = ""; }
+
+      // Get attachment list for risk analysis
+      let attachments = [];
+      try { attachments = item.attachments || []; } catch (_) { attachments = []; }
+
       // Get recipient's own email so we never flag our own domain
       let recipientEmail = "";
       try { recipientEmail = Office.context.mailbox.userProfile.emailAddress?.toLowerCase() || ""; }
@@ -611,7 +625,9 @@
         item.replyTo || [],
         bodyText,
         ccList,
-        recipientEmail
+        recipientEmail,
+        internetHeaders,
+        attachments
       );
 
       } catch (err) {
@@ -997,22 +1013,23 @@ const LOOKALIKES = [
   { real:"dhl.com",            patterns:["dhl-","dhI.com","dh1.com"] },
 ];
 
-async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo, bodyText, ccList, recipientEmail) {
-  // Accept params from onReady (already loaded) or re-read from Office if called standalone
-  bodyText       = bodyText       || "";
-  ccList         = ccList         || [];
-  recipientEmail = recipientEmail || "";
+async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, replyTo, bodyText, ccList, recipientEmail, internetHeaders, attachments) {
+  bodyText        = bodyText        || "";
+  ccList          = ccList          || [];
+  recipientEmail  = recipientEmail  || "";
+  internetHeaders = internetHeaders || "";
+  attachments     = attachments     || [];
   if (!senderEmail) {
     const item = Office.context.mailbox.item;
-    senderEmail    = item.from?.emailAddress?.toLowerCase() || "";
-    senderName     = item.from?.displayName || "";
-    senderDomain   = senderEmail.split("@")[1] || "";
-    subject        = item.subject || "";
-    replyTo        = item.replyTo || [];
-    ccList         = item.cc     || [];
-    recipientEmail = Office.context.mailbox.userProfile.emailAddress?.toLowerCase() || "";
+    senderEmail     = item.from?.emailAddress?.toLowerCase() || "";
+    senderName      = item.from?.displayName || "";
+    senderDomain    = senderEmail.split("@")[1] || "";
+    subject         = item.subject || "";
+    replyTo         = item.replyTo || [];
+    ccList          = item.cc      || [];
+    recipientEmail  = Office.context.mailbox.userProfile.emailAddress?.toLowerCase() || "";
+    attachments     = item.attachments || [];
   }
-  // Extract recipient's domain so we never flag our own org as suspicious
   const recipientDomain = recipientEmail.split("@")[1] || "";
 
   document.getElementById("safety-loading").style.display = "block";
@@ -1042,31 +1059,65 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain)),  // instant - contact mismatch
       Promise.resolve(checkBECLanguage(subject, bodyText)),                                  // instant - urgency/BEC patterns
       Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText, recipientDomain)),
-      Promise.resolve(checkFinancialRequest(subject, bodyText)),       // instant - thread hijack detection
+      Promise.resolve(checkFinancialRequest(subject, bodyText)),
+      Promise.resolve(checkOrgImpersonation(subject, bodyText, senderDomain, recipientDomain)),
+    Promise.resolve(checkEmailAuthentication(internetHeaders, senderDomain)),
+    Promise.resolve(checkMicrosoftSpamSignals(internetHeaders)),
+    Promise.resolve(checkThreadIntegrity(subject, internetHeaders)),
+    Promise.resolve(checkAttachments(attachments, bodyText)),
+    Promise.resolve(checkCredentialHarvesting(subject, bodyText)),
+    Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
+    Promise.resolve(checkUrgencySecrecyAuthority(subject, bodyText)),
+    Promise.resolve(checkCloudStoragePhishing(subject, bodyText, senderDomain)),
     ]);
 
     setSafetyStatus("");
 
     const results = [domainAgeResult, ...instantResults];
 
-    // ── Combination multiplier: name mismatch + financial request ─────────────
-    // These two together signal a payroll diversion / social engineering attack
-    const hasNameMismatch   = results.some(r =>
-      r.name === "Display Name Check" && (r.status === "warn" || r.status === "fail")
-    );
-    const hasFinancialFlag  = results.some(r =>
-      r.name === "Financial Request" && r.status === "warn"
-    );
+    // ── Combination multipliers ─────────────────────────────────────────────────
+    const hasNameMismatch    = results.some(r => r.name === "Display Name Check" && (r.status === "warn" || r.status === "fail"));
+    const hasFinancialFlag   = results.some(r => r.name === "Financial Request" && r.status === "warn");
+    const hasDMARCFail       = results.some(r => r.name === "Email Authentication" && r.badge === "AUTH FAILED");
+    const hasFakeThread      = results.some(r => r.name === "Thread Integrity" && r.status === "warn");
+    const hasCredHarvest     = results.some(r => r.name === "Credential Harvesting" && r.status === "fail");
+    const hasHighRiskAttach  = results.some(r => r.name === "Attachments" && r.badge === "HIGH RISK FILE");
+    const hasUrgencyTriple   = results.some(r => r.name === "BEC Triple Signal" && r.badge === "BEC PERFUME");
+    const hasGiftCard        = results.some(r => r.name === "Gift Card / Crypto" && r.status === "fail");
+    const hasCompanyMismatch = results.some(r => r.name === "Display Name Check" && r.badge === "COMPANY MISMATCH");
+    const hasCloudPhishing   = results.some(r => r.name === "Cloud Link Check" && r.badge === "CLOUD PHISHING");
 
     if (hasNameMismatch && hasFinancialFlag) {
-      results.push({
-        name:   "Combined Risk",
-        icon:   "🚨",
-        status: "fail",
-        badge:  "PAYROLL DIVERSION RISK",
-        desc:   "Name mismatch AND financial request detected together — this combination is the hallmark of a payroll diversion or direct deposit fraud attack. Do not action any financial requests without verbally confirming with the sender on a known phone number.",
-        weight: 25
-      });
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"PAYROLL DIVERSION RISK",
+        desc:"Name mismatch AND financial request — hallmark of payroll diversion / direct deposit fraud. Call the sender on a known number before taking any action.", weight:25 });
+    }
+    if (hasDMARCFail && hasCompanyMismatch) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"SPOOFED BRAND",
+        desc:"Authentication failure AND company name impersonation — this email is almost certainly spoofing a known brand. Do not click links or provide any information.", weight:25 });
+    }
+    if (hasDMARCFail && hasFinancialFlag) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"WIRE FRAUD SIGNAL",
+        desc:"Authentication failure AND financial request — an unauthorized sender asking for financial action is a strong indicator of wire fraud or BEC.", weight:30 });
+    }
+    if (hasFakeThread && hasFinancialFlag) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"THREAD HIJACK FRAUD",
+        desc:"Fake reply/forward thread AND financial request — attackers fake thread history to establish trust before requesting money.", weight:25 });
+    }
+    if (hasCredHarvest && hasHighRiskAttach) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"PHISHING KIT",
+        desc:"Credential harvesting language AND high-risk attachment — classic combination used to steal login credentials via malicious files.", weight:20 });
+    }
+    if (hasGiftCard && hasUrgencyTriple) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"EXECUTIVE FRAUD",
+        desc:"Gift card/crypto request AND BEC authority/urgency signals — classic executive impersonation fraud.", weight:25 });
+    }
+    if (hasCloudPhishing && hasCredHarvest) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"CLOUD CREDENTIAL THEFT",
+        desc:"Fake cloud storage link (SharePoint/OneDrive) AND credential harvesting language — designed to redirect you to a fake Microsoft login page.", weight:25 });
+    }
+    if (hasDMARCFail && hasNameMismatch && hasFinancialFlag) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"TRIPLE THREAT",
+        desc:"Authentication failure + name mismatch + financial request — three independent fraud signals simultaneously. Extremely high confidence fraud attempt.", weight:35 });
     }
 
     renderSafetyResults(results);
@@ -1191,13 +1242,47 @@ function checkReplyTo(senderEmail, replyToEmail) {
 function checkSubject(subject) {
   if (!subject) return { name:"Subject Analysis", icon:"✅", status:"pass", badge:"CLEAR", desc:"No subject to analyze.", weight:0 };
   const sl    = subject.toLowerCase();
+  const issues = [];
+  let weight = 0;
+
+  // Phishing keyword check
   const found = PHISH_KEYWORDS.filter(k => sl.includes(k));
-  if (found.length >= 2) return { name:"Subject Analysis", icon:"⚠️", status:"warn", badge:"SUSPICIOUS",
-    desc:`Contains ${found.length} phishing indicators: "${found.slice(0,2).join('", "')}"`, weight:15 };
-  if (found.length === 1) return { name:"Subject Analysis", icon:"⚠️", status:"warn", badge:"CAUTION",
-    desc:`Contains common phishing phrase: "${found[0]}"`, weight:8 };
-  return { name:"Subject Analysis", icon:"✅", status:"pass", badge:"CLEAR",
-    desc:"No suspicious phrases detected in subject.", weight:0 };
+  if (found.length >= 2) { issues.push(`Contains ${found.length} phishing indicators: "${found.slice(0,2).join('", "')}"`); weight += 15; }
+  else if (found.length === 1) { issues.push(`Contains phishing phrase: "${found[0]}"`); weight += 8; }
+
+  // Space inserted mid-word to bypass spam filters — "Pac kage", "Pa yment", "Inv oice"
+  // Pattern: word ends mid-sequence with a space then continues
+  const spacedWordPattern = /[a-z]{2,}(?:[a-z]) [a-z]{2,}/gi;
+  const spacedMatches = subject.match(spacedWordPattern) || [];
+  // Filter to likely intentional splits (combined word > 5 chars, no common two-word phrases)
+  const commonPhrases = new Set(['in the','of the','to the','on the','at the','by the','is a','it is','do not','can not','will be']);
+  const suspiciousSpaces = spacedMatches.filter(m => {
+    const combined = m.replace(' ','').toLowerCase();
+    return combined.length > 5 && !commonPhrases.has(m.toLowerCase());
+  });
+  if (suspiciousSpaces.length > 0) {
+    issues.push(`Subject contains word(s) with suspicious spacing: "${suspiciousSpaces[0]}" — possible spam filter bypass attempt`);
+    weight += 20;
+  }
+
+  // Recipient org name in subject from external sender (caught by body check but flag in subject too)
+  // This is handled contextually — just flag unusual capitalization patterns
+  // ALL CAPS words in subject (urgency tactic)
+  const capsWords = (subject.match(/[A-Z]{4,}/g) || []).filter(w => !['CAUTION','EXTERNAL','WARNING','URGENT','IMPORTANT','CONFIDENTIAL','NOTICE'].includes(w));
+  if (capsWords.length >= 2) {
+    issues.push(`Subject contains multiple ALL-CAPS words: "${capsWords.slice(0,2).join('", "')}" — common urgency manipulation tactic`);
+    weight += 8;
+  }
+
+  if (issues.length === 0) {
+    return { name:"Subject Analysis", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"No suspicious phrases or anomalies detected in subject.", weight:0 };
+  }
+
+  const status = weight >= 20 ? "fail" : "warn";
+  const icon   = weight >= 20 ? "🚨" : "⚠️";
+  const badge  = weight >= 20 ? "SUSPICIOUS" : "CAUTION";
+  return { name:"Subject Analysis", icon, status, badge, desc:issues[0], weight };
 }
 
 // ── CHECK 6: Lookalike / typosquat domain ─────────────────────────────────
@@ -1214,6 +1299,22 @@ function checkLookalike(domain) {
     desc:`"${domain}" has an unusual number of hyphens — common in phishing domains.`, weight:15 };
   if (SUSPICIOUS_TLDS.includes(tld)) return { name:"Domain Spoofing", icon:"⚠️", status:"warn", badge:"RISKY TLD",
     desc:`.${tld} domains are frequently used in phishing campaigns.`, weight:12 };
+  // Check for random/meaningless domain — no real words, all consonants, gibberish
+  // e.g. "dfwwsd.com", "xkzqtp.com", "bvrtms.net"
+  const domainName = domain.split('.')[0];
+  if (domainName.length >= 4) {
+    const vowels = (domainName.match(/[aeiou]/gi) || []).length;
+    const vowelRatio = vowels / domainName.length;
+    // Real words usually have 25-50% vowels. Below 15% = likely gibberish
+    if (vowelRatio < 0.15 && domainName.length >= 5) {
+      return {
+        name:"Domain Spoofing", icon:"⚠️", status:"warn", badge:"RANDOM DOMAIN",
+        desc:`"${domain}" appears to be a randomly generated domain name (very few vowels, no recognizable words). These are commonly used in phishing campaigns.`,
+        weight:20
+      };
+    }
+  }
+
   return { name:"Domain Spoofing", icon:"✅", status:"pass", badge:"LOOKS CLEAN",
     desc:"No lookalike or typosquat patterns detected.", weight:0 };
 }
@@ -1483,6 +1584,29 @@ function checkDisplayNameDomainMismatch(displayName, senderDomain, senderEmail) 
     "service","enquiries","enquiry","hi","hey","notifications","alerts",
     "donotreply","do-not-reply","postmaster","webmaster","reception"
   ]);
+
+  // Official-sounding display name words — when used with unknown domains, suspicious
+  // e.g. "Mail Notice", "Security Alert", "IT Support Team", "Account Service"
+  const officialSoundingWords = [
+    "notice","alert","notification","security","warning","update","urgent",
+    "it support","help desk","helpdesk","service desk","mail notice",
+    "mail alert","account service","account team","customer service",
+    "technical support","tech support","system admin","administrator",
+    "compliance","legal notice","legal department","hr notice",
+    "payroll team","finance team","accounts payable","accounts receivable"
+  ];
+  const knownSafeDomains = new Set([
+    'microsoft.com','google.com','apple.com','amazon.com','outlook.com',
+    'gmail.com','yahoo.com','office365.com','microsoftonline.com'
+  ]);
+  const looksOfficial = officialSoundingWords.some(w => nameLower.includes(w));
+  if (looksOfficial && !knownSafeDomains.has(senderDomain)) {
+    return {
+      name:"Display Name Check", icon:"⚠️", status:"warn", badge:"OFFICIAL IMPERSONATION",
+      desc:`Display name "${displayName}" uses official-sounding language but email is from unknown domain "${senderDomain}". Legitimate IT, security, or administrative emails come from known organizational domains.`,
+      weight:25
+    };
+  }
 
   // Extract first and last name parts from display name
   const nameParts = nameLower.split(/\s+/).filter(p => p.length > 1);
@@ -1818,6 +1942,396 @@ function checkFinancialRequest(subject, bodyText) {
     weight: 5
   };
 }
+
+
+// ── CHECK: Recipient org impersonation in content ─────────────────────────────
+function checkOrgImpersonation(subject, bodyText, senderDomain, recipientDomain) {
+  if (!recipientDomain || !senderDomain || senderDomain === recipientDomain) {
+    return { name:"Org Impersonation", icon:"✅", status:"pass", badge:"CLEAN", desc:"Sender matches recipient organization.", weight:0 };
+  }
+
+  const combined   = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  const recipientOrg = recipientDomain.split('.')[0].toLowerCase(); // e.g. "mattnj" from mattnj.com
+
+  if (recipientOrg.length < 3) {
+    return { name:"Org Impersonation", icon:"✅", status:"pass", badge:"CLEAN", desc:"Could not determine recipient organization name.", weight:0 };
+  }
+
+  // Check if the recipient's org name appears in subject or body from an external sender
+  if (combined.includes(recipientOrg)) {
+    return {
+      name:"Org Impersonation", icon:"🚨", status:"fail", badge:"ORG IMPERSONATION",
+      desc:`External sender from "${senderDomain}" references your organization ("${recipientOrg}") in the email content. This is a common tactic to make phishing emails appear to originate from inside your organization.`,
+      weight:35
+    };
+  }
+
+  return { name:"Org Impersonation", icon:"✅", status:"pass", badge:"CLEAN",
+    desc:"No recipient organization impersonation detected.", weight:0 };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NEW CHECK FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Helper: parse Authentication-Results header ───────────────────────────────
+function parseAuthResults(headers) {
+  const result = { spf:"none", dkim:"none", dmarc:"none", compauth:"none", reason:"", returnPath:"" };
+  if (!headers) return result;
+  const spfMatch     = headers.match(/spf=(pass|fail|softfail|neutral|none|permerror|temperror)/i);
+  if (spfMatch) result.spf = spfMatch[1].toLowerCase();
+  const dkimMatch    = headers.match(/dkim=(pass|fail|none|neutral|permerror|temperror)/i);
+  if (dkimMatch) result.dkim = dkimMatch[1].toLowerCase();
+  const dmarcMatch   = headers.match(/dmarc=(pass|fail|none|bestguesspass)/i);
+  if (dmarcMatch) result.dmarc = dmarcMatch[1].toLowerCase();
+  const compauthMatch = headers.match(/compauth=(pass|fail|none|softpass)\s*reason=(\d+)/i);
+  if (compauthMatch) { result.compauth = compauthMatch[1].toLowerCase(); result.reason = compauthMatch[2]; }
+  const rpMatch = headers.match(/Return-Path:\s*<?[^@]+@([^>)\s]+)/i);
+  if (rpMatch) result.returnPath = rpMatch[1].toLowerCase();
+  return result;
+}
+
+// ── CHECK: Email Authentication (SPF/DKIM/DMARC/compauth/Return-Path) ─────────
+function checkEmailAuthentication(headers, senderDomain) {
+  if (!headers) {
+    return { name:"Email Authentication", icon:"❓", status:"info", badge:"UNAVAILABLE",
+      desc:"Authentication headers not available for this email.", weight:0 };
+  }
+  const auth = parseAuthResults(headers);
+  const issues = [];
+  let weight = 0;
+
+  if (auth.spf === "fail")     { issues.push("SPF failed — sending server not authorized for this domain"); weight += 30; }
+  else if (auth.spf === "softfail") { issues.push("SPF soft-failed — server is questionable for this domain"); weight += 15; }
+
+  if (auth.dkim === "fail")    { issues.push("DKIM failed — message may have been tampered with in transit"); weight += 25; }
+  else if (auth.dkim === "none") { issues.push("DKIM not signed — no cryptographic verification of sender"); weight += 8; }
+
+  if (auth.dmarc === "fail")   { issues.push("DMARC failed — sender domain does not align with authentication. Strong spoofing indicator"); weight += 35; }
+  else if (auth.dmarc === "none") { issues.push("DMARC policy not set — domain has no spoofing protection configured"); weight += 5; }
+
+  if (auth.compauth === "fail") { issues.push(`Microsoft composite authentication failed (reason ${auth.reason})`); weight += 30; }
+
+  if (auth.returnPath && senderDomain && auth.returnPath !== senderDomain &&
+      !auth.returnPath.endsWith("." + senderDomain)) {
+    issues.push(`Return-Path domain "${auth.returnPath}" doesn't match visible sender domain "${senderDomain}"`);
+    weight += 20;
+  }
+
+  if (issues.length === 0) {
+    const passed = [];
+    if (auth.spf === "pass")      passed.push("SPF ✓");
+    if (auth.dkim === "pass")     passed.push("DKIM ✓");
+    if (auth.dmarc === "pass")    passed.push("DMARC ✓");
+    if (auth.compauth === "pass") passed.push("CompAuth ✓");
+    return { name:"Email Authentication", icon:"✅", status:"pass", badge:"VERIFIED",
+      desc:`All authentication checks passed: ${passed.join(", ") || "verified by M365"}.`, weight:0 };
+  }
+
+  return {
+    name:"Email Authentication", icon: weight >= 35 ? "🚨" : "⚠️",
+    status: weight >= 35 ? "fail" : "warn",
+    badge: weight >= 35 ? "AUTH FAILED" : "AUTH WARNING",
+    desc: issues.slice(0,2).join(". ") + ".", weight
+  };
+}
+
+// ── CHECK: Microsoft SCL / BCL spam signals ───────────────────────────────────
+function checkMicrosoftSpamSignals(headers) {
+  if (!headers) return { name:"Spam Signals (M365)", icon:"✅", status:"pass", badge:"N/A", desc:"Microsoft spam headers not available.", weight:0 };
+  let weight = 0; const flags = [];
+  const sclDirect = headers.match(/SCL:(-?\d+)/i);
+  if (sclDirect) {
+    const scl = parseInt(sclDirect[1]);
+    if (scl >= 7)      { flags.push(`Spam Confidence Level ${scl}/9 — Microsoft flagged as high-confidence spam`); weight += 25; }
+    else if (scl >= 5) { flags.push(`Spam Confidence Level ${scl}/9 — Microsoft flagged as likely spam`); weight += 15; }
+  }
+  if (/SFV:SPM/i.test(headers))  { flags.push("Microsoft Defender marked as spam (SFV:SPM)"); weight += 25; }
+  if (/SFV:BLK/i.test(headers))  { flags.push("Sender or IP is on a Microsoft block list (SFV:BLK)"); weight += 30; }
+  const bclMatch = headers.match(/BCL:(\d+)/i);
+  if (bclMatch) {
+    const bcl = parseInt(bclMatch[1]);
+    if (bcl >= 8)      { flags.push(`Bulk Complaint Level ${bcl}/9 — highly reported bulk/spam sender`); weight += 20; }
+    else if (bcl >= 4) { flags.push(`Bulk Complaint Level ${bcl}/9 — elevated bulk sender history`); weight += 10; }
+  }
+  if (flags.length === 0) return { name:"Spam Signals (M365)", icon:"✅", status:"pass", badge:"CLEAN", desc:"Microsoft Defender spam and bulk signals show no concerns.", weight:0 };
+  return { name:"Spam Signals (M365)", icon: weight >= 25 ? "🚨" : "⚠️",
+    status: weight >= 25 ? "fail" : "warn",
+    badge: weight >= 25 ? "SPAM FLAGGED" : "SPAM WARNING",
+    desc: flags[0], weight };
+}
+
+// ── CHECK: Thread integrity (Fake RE/FWD) ─────────────────────────────────────
+function checkThreadIntegrity(subject, headers) {
+  if (!subject) return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"No subject to analyze.", weight:0 };
+  const sub = subject.toLowerCase().trim();
+  const looksLikeReply = sub.startsWith("re:") || sub.startsWith("fw:") || sub.startsWith("fwd:");
+  if (!looksLikeReply) return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"Subject does not claim to be a reply or forward.", weight:0 };
+  const hasInReplyTo  = /In-Reply-To:/i.test(headers || "");
+  const hasReferences = /^References:/im.test(headers || "");
+  if (!hasInReplyTo && !hasReferences) {
+    return { name:"Thread Integrity", icon:"⚠️", status:"warn", badge:"FAKE THREAD",
+      desc:`Subject starts with "${subject.split(":")[0]}:" but this email has no valid thread history headers. It may be impersonating a reply to appear familiar and trusted.`,
+      weight:20 };
+  }
+  return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"VALID THREAD", desc:"Reply/forward subject is consistent with valid thread headers.", weight:0 };
+}
+
+// ── CHECK: Attachment risk (including PDF, HTML, double extension) ─────────────
+function checkAttachments(attachments, bodyText) {
+  if (!attachments || attachments.length === 0) {
+    return { name:"Attachments", icon:"✅", status:"pass", badge:"NONE", desc:"No attachments detected.", weight:0 };
+  }
+
+  const highRiskTypes = new Set(["html","htm","js","vbs","vbe","bat","cmd","ps1","wsf",
+    "hta","iso","img","lnk","scr","pif","msi","jar","one","onenote","exe","dll"]);
+  const archiveTypes  = new Set(["zip","rar","7z","tar","gz","ace"]);
+
+  // PDF is medium risk on its own but high risk if body has credential harvesting language
+  const credTerms = ["review","sign","verify","confirm","click","open","view document","secure"];
+  const bodyLower = (bodyText || "").toLowerCase();
+  const bodyHasCredTerms = credTerms.some(t => bodyLower.includes(t));
+
+  const issues = [];
+  let weight = 0;
+
+  for (const att of attachments) {
+    const name  = (att.name || "").toLowerCase();
+    const parts = name.split(".");
+    const ext   = parts[parts.length - 1];
+
+    // Double extension (Invoice.pdf.html)
+    if (parts.length >= 3) {
+      const lastExt   = parts[parts.length - 1];
+      const secondExt = parts[parts.length - 2];
+      if (highRiskTypes.has(lastExt)) {
+        issues.push(`"${att.name}" — double extension (.${secondExt}.${lastExt}) designed to disguise a dangerous file as a ${secondExt.toUpperCase()}.`);
+        weight += 40; continue;
+      }
+    }
+
+    // High risk types
+    if (highRiskTypes.has(ext)) {
+      issues.push(`"${att.name}" — high-risk file type (.${ext}). These file types can execute malicious code when opened.`);
+      weight += 35; continue;
+    }
+
+    // HTML attachment specifically — very common phishing vector
+    if (ext === "html" || ext === "htm") {
+      issues.push(`"${att.name}" — HTML attachment. Attackers use HTML files to create fake login pages that run locally, bypassing URL filters.`);
+      weight += 35; continue;
+    }
+
+    // PDF with credential context
+    if (ext === "pdf" && bodyHasCredTerms) {
+      issues.push(`"${att.name}" — PDF attachment combined with document review/sign language. Often used in credential phishing (fake DocuSign, Adobe Sign, shared document lures).`);
+      weight += 20; continue;
+    }
+
+    // Password-protected archive
+    if (archiveTypes.has(ext)) {
+      const passInBody = bodyLower.includes("password") || bodyLower.includes("the pass") || bodyLower.includes("pw:");
+      if (passInBody) {
+        issues.push(`"${att.name}" — password-protected archive. Commonly used to prevent security tools from scanning the contents.`);
+        weight += 20;
+      } else {
+        issues.push(`"${att.name}" — compressed archive. Verify you are expecting this before extracting.`);
+        weight += 8;
+      }
+    }
+  }
+
+  if (issues.length === 0) {
+    const names = attachments.slice(0,3).map(a => a.name).join(", ");
+    return { name:"Attachments", icon:"✅", status:"pass", badge:"LOW RISK",
+      desc:`${attachments.length} attachment(s) detected — no high-risk file types: ${names}`, weight:0 };
+  }
+
+  return {
+    name:"Attachments", icon: weight >= 35 ? "🚨" : "⚠️",
+    status: weight >= 35 ? "fail" : "warn",
+    badge: weight >= 35 ? "HIGH RISK FILE" : "ATTACHMENT RISK",
+    desc: issues[0], weight
+  };
+}
+
+// ── CHECK: Credential harvesting phrases ──────────────────────────────────────
+function checkCredentialHarvesting(subject, bodyText) {
+  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  if (combined.length < 10) return { name:"Credential Harvesting", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
+
+  const patterns = [
+    // Document review/sign lures
+    "review secure document","view secure document","secure document shared",
+    "please review and sign","review and approve","sign the document",
+    "adobe sign request","docusign document","document ready for signature",
+    "shared file notification","file has been shared with you","shared with you",
+    // Account/credential threats
+    "password expires","your password will expire","password expiration notice",
+    "mfa disabled","multi-factor disabled","authenticator has been disabled",
+    "quarantine release","release from quarantine","quarantined message",
+    "verify your identity","confirm your credentials","re-enter your password",
+    "account suspended","your mailbox is full","storage limit reached",
+    "unusual sign-in","suspicious sign-in","login from new device",
+    "click to verify email","confirm your email address",
+    // IT impersonation
+    "microsoft account team","it help desk","it department","helpdesk ticket",
+    "security team","your admin has","system notification",
+  ];
+
+  const found = patterns.filter(p => combined.includes(p));
+  if (found.length === 0) return { name:"Credential Harvesting", icon:"✅", status:"pass", badge:"CLEAR", desc:"No credential harvesting language detected.", weight:0 };
+
+  const weight = found.length >= 3 ? 35 : found.length >= 2 ? 25 : 15;
+  return {
+    name:"Credential Harvesting", icon:"🚨", status:"fail", badge:"CREDENTIAL RISK",
+    desc:`${found.length} credential harvesting phrase(s) detected: "${found.slice(0,2).join('", "')}". Do not enter login credentials via any link in this email.`,
+    weight
+  };
+}
+
+// ── CHECK: Gift card / crypto / peer-to-peer ──────────────────────────────────
+function checkGiftCardCrypto(subject, bodyText) {
+  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  if (combined.length < 10) return { name:"Gift Card / Crypto", icon:"✅", status:"pass", badge:"NONE", desc:"No content to analyze.", weight:0 };
+  const patterns = [
+    "gift card","itunes card","google play card","amazon gift card","steam card",
+    "apple gift card","best buy card","target gift card","walmart gift card",
+    "buy cards","purchase cards","get cards","send card codes",
+    "bitcoin","cryptocurrency","crypto wallet","ethereum","usdt","tether",
+    "zelle","venmo","cashapp","cash app","paypal friends","send money via",
+    "western union","moneygram","money order","wire me","send me funds",
+  ];
+  const found = patterns.filter(p => combined.includes(p));
+  if (found.length === 0) return { name:"Gift Card / Crypto", icon:"✅", status:"pass", badge:"NONE", desc:"No gift card or cryptocurrency request detected.", weight:0 };
+  return {
+    name:"Gift Card / Crypto", icon:"🚨", status:"fail", badge:"FRAUD LANGUAGE",
+    desc:`Payment via gift card, crypto, or peer-to-peer app requested: "${found.slice(0,2).join('", "')}". Legitimate organizations never request payment this way.`,
+    weight:20
+  };
+}
+
+// ── CHECK: Urgency + secrecy + authority triple combo ─────────────────────────
+function checkUrgencySecrecyAuthority(subject, bodyText) {
+  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  if (combined.length < 10) return { name:"BEC Triple Signal", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
+
+  const urgency   = ["urgent","immediately","right away","asap","time sensitive","today only","by end of day","eod","before close","deadline","right now"];
+  const secrecy   = ["do not discuss","keep this between us","don't mention","confidential","do not forward","do not call","handle privately","between us","discreetly","do not share"];
+  const authority = ["ceo","president","executive","director","vp of","chief","i need you to","on my behalf","acting on behalf","as your manager","as your supervisor","this is urgent from"];
+
+  const hasUrgency   = urgency.some(p => combined.includes(p));
+  const hasSecrecy   = secrecy.some(p => combined.includes(p));
+  const hasAuthority = authority.some(p => combined.includes(p));
+  const count = [hasUrgency,hasSecrecy,hasAuthority].filter(Boolean).length;
+
+  if (count === 3) return { name:"BEC Triple Signal", icon:"🚨", status:"fail", badge:"BEC PERFUME",
+    desc:"Urgency + secrecy + authority language all present. 'Do this now, don't tell anyone, I'm the boss' is the definitive BEC signature.", weight:30 };
+  if (count === 2) {
+    const found = [];
+    if (hasUrgency) found.push("urgency"); if (hasSecrecy) found.push("secrecy"); if (hasAuthority) found.push("authority");
+    return { name:"BEC Triple Signal", icon:"⚠️", status:"warn", badge:"BEC SIGNALS",
+      desc:`Two BEC signals: ${found.join(" + ")}. Common in social engineering and executive impersonation.`, weight:15 };
+  }
+  return { name:"BEC Triple Signal", icon:"✅", status:"pass", badge:"CLEAR", desc:"No urgency/secrecy/authority pattern combination detected.", weight:0 };
+}
+
+// ── CHECK: SharePoint / OneDrive / Cloud storage phishing ─────────────────────
+function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
+  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  if (combined.length < 10) return { name:"Cloud Link Check", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
+
+  const issues = [];
+  let weight = 0;
+
+  // Known legitimate cloud storage senders — if sender IS from these, no flag
+  const legitimateCloudDomains = new Set([
+    "microsoft.com","sharepoint.com","onedrive.com","live.com","office365.com",
+    "microsoftonline.com","google.com","googleapis.com","dropbox.com",
+    "box.com","docusign.com","adobe.com","adobesign.com"
+  ]);
+
+  const isLegitSender = legitimateCloudDomains.has(senderDomain) ||
+    senderDomain.endsWith(".microsoft.com") ||
+    senderDomain.endsWith(".sharepoint.com");
+
+  // SharePoint phishing patterns
+  const sharepointPatterns = [
+    "sharepoint","shared via sharepoint","view in sharepoint",
+    "sharepoint online","open in sharepoint"
+  ];
+  const oneDrivePatterns = [
+    "onedrive","view in onedrive","shared via onedrive",
+    "onedrive for business","open with onedrive"
+  ];
+  const googleDrivePatterns = [
+    "google drive","view in google drive","shared via google drive",
+    "drive.google.com","open with google docs"
+  ];
+  const dropboxPatterns = [
+    "dropbox","view in dropbox","shared via dropbox","dropbox link"
+  ];
+  const genericCloudPatterns = [
+    "click to view document","click here to view","view document online",
+    "open the document","access the file","download the file",
+    "preview the document","view the shared file",
+    "your document is ready","document awaiting your review"
+  ];
+
+  const hasSharePoint  = sharepointPatterns.some(p => combined.includes(p));
+  const hasOneDrive    = oneDrivePatterns.some(p => combined.includes(p));
+  const hasGDrive      = googleDrivePatterns.some(p => combined.includes(p));
+  const hasDropbox     = dropboxPatterns.some(p => combined.includes(p));
+  const hasGenericLink = genericCloudPatterns.some(p => combined.includes(p));
+
+  if (!isLegitSender) {
+    if (hasSharePoint) {
+      issues.push("SharePoint link from non-Microsoft sender — attackers send fake SharePoint notifications to steal Microsoft credentials. Verify this is a genuine Microsoft notification before clicking.");
+      weight += 30;
+    }
+    if (hasOneDrive) {
+      issues.push("OneDrive link from non-Microsoft sender — fake OneDrive sharing notifications are commonly used to redirect users to credential-stealing pages. Go directly to onedrive.com instead of clicking.");
+      weight += 30;
+    }
+    if (hasGDrive && !hasSharePoint && !hasOneDrive) {
+      issues.push("Google Drive link from external sender. Verify the sender before clicking any document links.");
+      weight += 15;
+    }
+    if (hasDropbox && !hasSharePoint && !hasOneDrive) {
+      issues.push("Dropbox link from external sender. Verify this is expected before clicking.");
+      weight += 10;
+    }
+    if (hasGenericLink && !hasSharePoint && !hasOneDrive && !hasGDrive && !hasDropbox) {
+      issues.push("Email contains generic 'click to view document' language from an external sender. Verify the sender before clicking any links.");
+      weight += 10;
+    }
+  }
+
+  // PDF phishing via cloud — "You have received a PDF via SharePoint/OneDrive"
+  const hasPdfCloud = (hasSharePoint || hasOneDrive || hasGDrive) &&
+    (combined.includes("pdf") || combined.includes("invoice") || combined.includes("contract") || combined.includes("agreement"));
+  if (!isLegitSender && hasPdfCloud) {
+    issues.push("PDF document shared via cloud storage from external sender — common lure for credential phishing.");
+    weight += 15;
+  }
+
+  if (issues.length === 0) {
+    if (hasSharePoint || hasOneDrive || hasGDrive || hasDropbox) {
+      return { name:"Cloud Link Check", icon:"✅", status:"pass", badge:"LEGIT SENDER",
+        desc:`Cloud storage link detected from verified sender (${senderDomain}). Appears legitimate.`, weight:0 };
+    }
+    return { name:"Cloud Link Check", icon:"✅", status:"pass", badge:"CLEAN", desc:"No cloud storage phishing patterns detected.", weight:0 };
+  }
+
+  return {
+    name:"Cloud Link Check", icon: weight >= 25 ? "🚨" : "⚠️",
+    status: weight >= 25 ? "fail" : "warn",
+    badge: weight >= 25 ? "CLOUD PHISHING" : "CLOUD CAUTION",
+    desc: issues[0], weight
+  };
+}
+
 
 // ── Render safety percentage circle ─────────────────────────────────────────
 function renderSafetyCircle(safeScore, results, bannerClass) {
