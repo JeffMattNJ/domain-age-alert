@@ -1943,24 +1943,48 @@ function checkOrgImpersonation(subject, bodyText, senderDomain, recipientDomain)
     return { name:"Org Impersonation", icon:"✅", status:"pass", badge:"CLEAN", desc:"Sender matches recipient organization.", weight:0 };
   }
 
-  const combined   = ((subject||"") + " " + (bodyText||"")).toLowerCase();
-  const recipientOrg = recipientDomain.split('.')[0].toLowerCase(); // e.g. "mattnj" from mattnj.com
+  // Use cleaned body — strips quoted replies, signatures, CAUTION banners
+  // This prevents flagging when recipient email appears in quoted reply headers
+  const cleanBody    = cleanBodyForAnalysis(bodyText);
+  const combined     = ((subject||"") + " " + cleanBody).toLowerCase();
+  const recipientOrg = recipientDomain.split('.')[0].toLowerCase();
 
   if (recipientOrg.length < 3) {
     return { name:"Org Impersonation", icon:"✅", status:"pass", badge:"CLEAN", desc:"Could not determine recipient organization name.", weight:0 };
   }
 
-  // Check if the recipient's org name appears in subject or body from an external sender
-  if (combined.includes(recipientOrg)) {
+  // Only flag if org name appears in the CLEAN body (not in quoted replies or signatures)
+  // AND it appears in a suspicious context (claiming to be from, on behalf of, etc.)
+  const orgInCleanBody = combined.includes(recipientOrg);
+  if (!orgInCleanBody) {
+    return { name:"Org Impersonation", icon:"✅", status:"pass", badge:"CLEAN",
+      desc:"No recipient organization impersonation detected in message body.", weight:0 };
+  }
+
+  // Check for suspicious framing — org name near impersonation language
+  const impersonationContext = [
+    `from ${recipientOrg}`, `on behalf of ${recipientOrg}`,
+    `${recipientOrg} team`, `${recipientOrg} it`, `${recipientOrg} support`,
+    `${recipientOrg} admin`, `${recipientOrg} security`,
+    `${recipientOrg} hr`, `${recipientOrg} finance`,
+    `${recipientOrg} payroll`, `${recipientOrg} management`,
+    `this is ${recipientOrg}`, `${recipientOrg} notification`,
+    `${recipientOrg} alert`, `${recipientOrg} system`,
+  ];
+
+  const hasSuspiciousContext = impersonationContext.some(p => combined.includes(p));
+
+  if (hasSuspiciousContext) {
     return {
       name:"Org Impersonation", icon:"🚨", status:"fail", badge:"ORG IMPERSONATION",
-      desc:`External sender from "${senderDomain}" references your organization ("${recipientOrg}") in the email content. This is a common tactic to make phishing emails appear to originate from inside your organization.`,
+      desc:`External sender from "${senderDomain}" uses your organization name ("${recipientOrg}") in a suspicious context. Common tactic to make phishing appear to come from inside your organization.`,
       weight:35
     };
   }
 
+  // Org name present but no suspicious context — pass silently
   return { name:"Org Impersonation", icon:"✅", status:"pass", badge:"CLEAN",
-    desc:"No recipient organization impersonation detected.", weight:0 };
+    desc:"Organization name appears in email but no suspicious impersonation context detected.", weight:0 };
 }
 
 
@@ -2278,34 +2302,131 @@ function checkGiftCardCrypto(subject, bodyText) {
 
 // ── CHECK: Urgency + secrecy + authority triple combo ─────────────────────────
 function checkUrgencySecrecyAuthority(subject, bodyText) {
-  // Use cleaned body — strips signatures, CAUTION banners, quoted replies
-  // so "Chief Financial Officer" in a signature doesn't trigger authority
-  // and "end of day" in an IT response doesn't trigger urgency
   const cleanBody = cleanBodyForAnalysis(bodyText);
   const combined  = ((subject||"") + " " + cleanBody).toLowerCase();
   if (combined.length < 10) return { name:"BEC Triple Signal", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
 
-  // Urgency: requires active request framing, not just time references
-  const urgency   = ["please do this now","handle this immediately","do this right away","asap please","time sensitive request","today only","needs to be done today","before close of business","this is urgent","urgent request","urgent action required","right now please"];
-  // Secrecy: explicit instructions to hide the action
-  const secrecy   = ["do not discuss","keep this between us","don't mention this","do not forward","do not call anyone","handle privately","don't tell anyone","between us only","do not share this","keep this confidential"];
-  // Authority: first-person commands from leadership, NOT signatures
-  const authority = ["i need you to","i want you to","as your ceo","as your president","on behalf of the ceo","acting ceo","i am your manager","as your supervisor","this is urgent from me","do this for me","i am asking you to","per my request","at my direction"];
+  // ── ISOLATION signals — THE #1 BEC indicator ─────────────────────────────────
+  // "No calls" / "text only" / "don't call" = attacker preventing verbal verification
+  // Legitimate managers NEVER tell you not to call them
+  const isolationPatterns = [
+    "no calls","no call please","text only","do not call","don't call",
+    "can't take calls","cannot take calls","i can't take calls",
+    "don't call me","not available by phone","reply only","just reply to this email",
+    "don't call anyone","no need to call","just email me back",
+    "stick to email","reply to this email only","no phone"
+  ];
 
-  const hasUrgency   = urgency.some(p => combined.includes(p));
-  const hasSecrecy   = secrecy.some(p => combined.includes(p));
-  const hasAuthority = authority.some(p => combined.includes(p));
-  const count = [hasUrgency,hasSecrecy,hasAuthority].filter(Boolean).length;
+  // ── AVAILABILITY PROBE — attacker testing if target is reachable ──────────────
+  // "Are you available?", "Are you in?", "Can you help me with something?"
+  // Alone not suspicious, but combined with other signals = grooming opener
+  const availabilityProbe = [
+    "are you available","are you in the office","are you around",
+    "can you help me with something","can you do me a favor","can you do me a favour",
+    "quick question","quick favor","quick favour","i need your help with something",
+    "before i tell you","need you to handle something"
+  ];
 
-  if (count === 3) return { name:"BEC Triple Signal", icon:"🚨", status:"fail", badge:"BEC PERFUME",
-    desc:"Urgency + secrecy + authority language all present. 'Do this now, don't tell anyone, I'm the boss' is the definitive BEC signature.", weight:30 };
-  if (count === 2) {
-    const found = [];
-    if (hasUrgency) found.push("urgency"); if (hasSecrecy) found.push("secrecy"); if (hasAuthority) found.push("authority");
-    return { name:"BEC Triple Signal", icon:"⚠️", status:"warn", badge:"BEC SIGNALS",
-      desc:`Two BEC signals: ${found.join(" + ")}. Common in social engineering and executive impersonation.`, weight:15 };
+  // ── URGENCY WITH CONSEQUENCE — threat of penalty/legal/loss ─────────────────
+  // "Failure to resolve", "legal action", "account suspended", "within 72 hours"
+  // These are MUCH stronger signals than just "end of day" or "immediately"
+  const urgencyWithConsequence = [
+    "failure to resolve","legal action","further penalties","account will be",
+    "within 24 hours","within 48 hours","within 72 hours","account suspended",
+    "immediate action required","respond immediately or","failure to comply",
+    "subject to penalties","risk of suspension","avoid disruption",
+    "done today make it","high priority today","needs to be done today",
+    "must be completed today","process this today","today so make it"
+  ];
+
+  // ── AUTHORITY + PERSONAL REQUEST combo ───────────────────────────────────────
+  // First-person commands from someone claiming authority, asking for personal favor
+  const authorityRequest = [
+    "i need you to","i want you to","do this for me","do me a favour",
+    "do me a favor","as your ceo","as your president","on behalf of the ceo",
+    "i am asking you to","per my request","at my direction",
+    "could you do me a favour","could you do me a favor",
+    "i need a favor","i need a favour","need you to take care of it for me"
+  ];
+
+  // ── SECRECY — explicit instructions to hide action ───────────────────────────
+  const secrecyPatterns = [
+    "do not discuss","keep this between us","don't mention","do not forward",
+    "handle privately","don't tell anyone","do not share",
+    "keep this confidential","no need to involve","bypass the usual",
+    "check spam filter","incase it's blocked","incase its blocked",
+    "don't tell","keep quiet about"
+  ];
+
+  const hasIsolation   = isolationPatterns.some(p => combined.includes(p));
+  const hasProbe       = availabilityProbe.some(p => combined.includes(p));
+  const hasUrgency     = urgencyWithConsequence.some(p => combined.includes(p));
+  const hasAuthority   = authorityRequest.some(p => combined.includes(p));
+  const hasSecrecy     = secrecyPatterns.some(p => combined.includes(p));
+
+  const signals = [];
+  if (hasIsolation) signals.push("no-call instruction");
+  if (hasProbe)     signals.push("availability probe");
+  if (hasUrgency)   signals.push("urgency with consequence");
+  if (hasAuthority) signals.push("authority request");
+  if (hasSecrecy)   signals.push("secrecy instruction");
+
+  // ── Isolation alone = immediate red flag (legitimate managers never say "no calls") ─
+  if (hasIsolation) {
+    return {
+      name:"BEC Triple Signal", icon:"🚨", status:"fail", badge:"BEC — NO CALL TRAP",
+      desc:`"No calls / text only / reply only" instruction detected — this is the #1 BEC indicator. Attackers prevent phone verification so you can't confirm the request is real. Always call the sender on a known number before acting.`,
+      weight:30
+    };
   }
-  return { name:"BEC Triple Signal", icon:"✅", status:"pass", badge:"CLEAR", desc:"No urgency/secrecy/authority pattern combination detected.", weight:0 };
+
+  // ── Authority + secrecy = high risk (classic executive fraud) ────────────────
+  if (hasAuthority && hasSecrecy) {
+    return {
+      name:"BEC Triple Signal", icon:"🚨", status:"fail", badge:"BEC PERFUME",
+      desc:`Authority request AND secrecy instruction detected together: ${signals.join(", ")}. "Do this for me and don't tell anyone" is a definitive executive fraud pattern.`,
+      weight:28
+    };
+  }
+
+  // ── Availability probe + authority + urgency = grooming sequence ─────────────
+  if (hasProbe && hasAuthority && hasUrgency) {
+    return {
+      name:"BEC Triple Signal", icon:"🚨", status:"fail", badge:"BEC SEQUENCE",
+      desc:`Classic BEC grooming sequence: availability probe + authority request + urgency. "${signals.join(", ")}" detected. Attackers test availability before making fraudulent requests.`,
+      weight:25
+    };
+  }
+
+  // ── Urgency with consequence + authority = strong signal ─────────────────────
+  if (hasUrgency && hasAuthority) {
+    return {
+      name:"BEC Triple Signal", icon:"⚠️", status:"warn", badge:"BEC SIGNALS",
+      desc:`Authority request with consequence-based urgency detected: ${signals.join(", ")}. Common pattern in wire fraud and executive impersonation.`,
+      weight:15
+    };
+  }
+
+  // ── Availability probe + secrecy = suspicious opener ─────────────────────────
+  if (hasProbe && hasSecrecy) {
+    return {
+      name:"BEC Triple Signal", icon:"⚠️", status:"warn", badge:"BEC SIGNALS",
+      desc:`Availability probe with secrecy instruction: ${signals.join(", ")}. Common in gift card and wire fraud attacks.`,
+      weight:12
+    };
+  }
+
+  // ── Single strong signal — informational only ─────────────────────────────────
+  if (hasSecrecy || (hasAuthority && hasProbe)) {
+    return {
+      name:"BEC Triple Signal", icon:"⚠️", status:"warn", badge:"CAUTION",
+      desc:`BEC signal present: ${signals.join(", ")}. Monitor for additional red flags.`,
+      weight:5
+    };
+  }
+
+  return { name:"BEC Triple Signal", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No Business Email Compromise behavioral patterns detected.", weight:0 };
 }
 
 // ── CHECK: SharePoint / OneDrive / Cloud storage phishing ─────────────────────
