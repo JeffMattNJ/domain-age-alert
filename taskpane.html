@@ -1034,6 +1034,10 @@ const SUSPICIOUS_TLDS = [
   "accountant","cricket","webcam","men","country","kim",
   // Misleading TLDs
   "support","help","services","solutions","claims","refund",
+  // Country TLDs with disproportionate phishing/scam abuse relative to legitimate
+  // use by US small-business correspondents. If a real overseas partner ever
+  // trips this, it's a one-line removal — flag it if that happens.
+  "ru","cn",
 ];
 const LOOKALIKES = [
   { real:"paypal.com",         patterns:["paypa1","paypai","paypal-","paypalservice","pay-pal","paypol"] },
@@ -1141,6 +1145,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkUrgencySecrecyAuthority(subject, bodyText)),
     Promise.resolve(checkCloudStoragePhishing(subject, bodyText, senderDomain)),
     Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
+    Promise.resolve(checkBodyUrls(bodyText)),
     ]);
 
     setSafetyStatus("");
@@ -1630,6 +1635,173 @@ function checkSubjectUrls(subject, cachedResults) {
   return { name:"Subject URLs", icon:"✅", status:"pass", badge:"CLEAN",
     desc:`Found ${matches.length} URL(s) in subject — no suspicious domains detected.`, weight:0 };
 }
+
+// ── URL Body Check ──────────────────────────────────────────────────────────
+// Extracted from the RAW body (not cleanBodyForAnalysis output) — that helper
+// strips lines that are nothing but a bare URL, treating them as signature
+// clutter, which would throw away exactly the links we want to inspect here.
+const LINK_REWRAPPERS = [
+  { match: "safelinks.protection.outlook.com", param: "url" },   // Microsoft Defender Safe Links
+  { match: "urldefense.com",                    param: "u" },    // Proofpoint URL Defense (v2-style param; v3 uses __-delimited, best-effort)
+  { match: "urldefense.proofpoint.com",         param: "u" },
+  { match: "protect-us.mimecast.com",           param: "u" },    // Mimecast
+  { match: "protect2.fireeye.com",              param: "u" },    // Trellix/FireEye
+  { match: "linkprotect.cudasvc.com",           param: "a" },    // Barracuda Link Protect
+];
+
+const URL_SHORTENERS = [
+  "bit.ly","tinyurl.com","t.co","goo.gl","ow.ly","is.gd","buff.ly",
+  "rebrand.ly","cutt.ly","shorturl.at","rb.gy","tiny.cc","bl.ink"
+];
+
+// Credential/urgency words commonly stuffed into a domain alongside a brand
+// name — "microsoft-verify-login.com" isn't a typo of microsoft.com, it's a
+// different domain entirely wearing the brand name as a costume.
+const DOMAIN_CREDENTIAL_WORDS = ["secure","verify","login","update","account","billing","signin","confirm"];
+
+function unwrapRedirectUrl(rawUrl, hostname) {
+  const wrapper = LINK_REWRAPPERS.find(w => hostname.includes(w.match));
+  if (!wrapper) return null;
+  try {
+    const paramMatch = rawUrl.match(new RegExp(`[?&]${wrapper.param}=([^&]+)`, "i"));
+    if (!paramMatch) return null;
+    return decodeURIComponent(paramMatch[1]);
+  } catch (_) { return null; }
+}
+
+// Checks whether a known brand name shows up somewhere it shouldn't:
+// - as a fake "nested domain" sitting in the subdomain position
+//   (microsoft.com.security-alert.ru — the real domain is security-alert.ru)
+// - combined with a credential/urgency word anywhere in the hostname
+//   (microsoft-verify-login.com, login-microsoft-verify-88912xzc.example.com)
+// Returns null if nothing suspicious, or a description string if it finds something.
+function checkBrandInHostname(destHost, baseDomain) {
+  for (const { brand, domains } of BRANDS) {
+    const brandIsRealOwner = domains.some(d => baseDomain === d || baseDomain.endsWith("." + d));
+    if (brandIsRealOwner) continue; // this really is the brand's own domain — nothing to flag
+
+    const subLabels = destHost.slice(0, destHost.length - baseDomain.length).replace(/\.$/, "");
+    const brandInSubdomain = subLabels.includes(brand);
+    const brandInBaseDomain = baseDomain.includes(brand);
+
+    if (brandInSubdomain) {
+      return `"${destHost}" puts "${brand}" in front of the real domain — the actual destination is "${baseDomain}", not ${brand}`;
+    }
+    if (brandInBaseDomain && DOMAIN_CREDENTIAL_WORDS.some(w => baseDomain.includes(w))) {
+      return `"${baseDomain}" combines the "${brand}" name with a credential-related word — not ${brand}'s real domain`;
+    }
+  }
+  return null;
+}
+
+function checkBodyUrls(bodyText) {
+  if (!bodyText) return { name:"URL Body Check", icon:"✅", status:"pass", badge:"NONE",
+    desc:"No links found in message body.", weight:0 };
+
+  const urlPattern = /https?:\/\/[^\s<>\]\)"']+/g;
+  const rawMatches = bodyText.match(urlPattern) || [];
+  // Trim common trailing sentence punctuation that isn't part of the URL
+  const urls = [...new Set(rawMatches.map(u => u.replace(/[.,;:!?]+$/, "")))];
+
+  if (urls.length === 0) return { name:"URL Body Check", icon:"✅", status:"pass", badge:"NONE",
+    desc:"No links found in message body.", weight:0 };
+
+  const suspicious = [];
+  const shortened   = [];
+  const advisories  = [];
+  let checkedCount  = 0;
+
+  for (const rawUrl of urls) {
+    const hostMatch = rawUrl.match(/^https?:\/\/([^\/]+)/i);
+    if (!hostMatch) continue;
+    const hostname = hostMatch[1].toLowerCase();
+
+    // If this is a known link-rewriter (Safe Links, Proofpoint, Mimecast, etc.),
+    // evaluate the REAL destination it's hiding, not the rewriter's own domain.
+    const unwrapped = unwrapRedirectUrl(rawUrl, hostname);
+    const destHostMatch = unwrapped && unwrapped.match(/^https?:\/\/([^\/]+)/i);
+    const destHost = destHostMatch ? destHostMatch[1].toLowerCase() : hostname;
+    const destUrl  = unwrapped || rawUrl;
+
+    checkedCount++;
+
+    if (URL_SHORTENERS.includes(destHost)) {
+      shortened.push(destHost);
+      continue;
+    }
+
+    // Use the base registrable domain (last 2 labels), not the full hostname,
+    // for the randomness/typosquat heuristics below. checkLookalike's vowel-
+    // ratio "random domain" check was tuned for sender domains, which are
+    // always the bare registrable domain. Body URLs are full of legitimate
+    // tracking subdomains (e.g. "dy8hwtfbb.cc.rs6.net" from Constant Contact)
+    // that would false-positive as "random" if the full hostname were
+    // evaluated there — the random-looking part is a routine per-campaign
+    // tracking ID, not a spoofing attempt.
+    const labels = destHost.split(".");
+    const baseDomain = labels.length > 2 ? labels.slice(-2).join(".") : destHost;
+
+    // Brand-in-subdomain / brand+credential-word tricks — these specifically
+    // need the FULL hostname (not just the base domain) since the trick lives
+    // in the subdomain or in extra words tacked onto the domain itself.
+    const brandTrick = checkBrandInHostname(destHost, baseDomain);
+    if (brandTrick) { suspicious.push(brandTrick); continue; }
+
+    // Reuse the same lookalike/homoglyph/number-substitution/punycode logic
+    // already built for sender domains — a phishing link is just as often a
+    // typosquat, IDN homograph, or "am4z0n.com"-style substitution as a
+    // phishing sender domain is.
+    const lookalikeResult   = checkLookalike(baseDomain);
+    const homoglyphResult   = checkHomoglyphs(baseDomain);
+    const substitutionResult = checkNumberSubstitution(baseDomain);
+    if (lookalikeResult.status !== "pass") {
+      suspicious.push(`${destHost} — ${lookalikeResult.desc}`);
+    } else if (homoglyphResult.status !== "pass") {
+      suspicious.push(`${destHost} — ${homoglyphResult.desc}`);
+    } else if (substitutionResult.status !== "pass") {
+      suspicious.push(`${destHost} — ${substitutionResult.desc}`);
+    } else {
+      // Low-weight, informational only — HTTPS/encoding alone don't make a
+      // link safe or unsafe, so these never escalate past a soft advisory,
+      // and known rewrappers/ESP tracking links are excluded since long,
+      // heavily-encoded URLs are completely routine for those and would
+      // just be noise (we already unwrap the ones we recognize above).
+      if (/^http:\/\//i.test(destUrl)) {
+        advisories.push(`${destHost} uses unencrypted http:// rather than https://`);
+      } else if (!unwrapped && destUrl.length > 200 && (destUrl.match(/[%=&]/g) || []).length > 8) {
+        advisories.push(`${destHost} link is very long and heavily encoded — worth a closer look before clicking`);
+      }
+    }
+  }
+
+  if (suspicious.length > 0) {
+    return {
+      name: "URL Body Check", icon: "🚨", status: "fail", badge: "SUSPICIOUS LINK",
+      desc: `Message body contains a suspicious link destination: ${suspicious[0]}`,
+      weight: 35
+    };
+  }
+
+  if (shortened.length > 0) {
+    return {
+      name: "URL Body Check", icon: "⚠️", status: "warn", badge: "SHORTENED LINK",
+      desc: `Message body contains link(s) via a URL shortener (${[...new Set(shortened)].join(", ")}) — the real destination is hidden until clicked. Hover or use a link-preview tool before clicking.`,
+      weight: 12
+    };
+  }
+
+  if (advisories.length > 0) {
+    return {
+      name: "URL Body Check", icon: "⚠️", status: "warn", badge: "ADVISORY",
+      desc: advisories[0],
+      weight: 5
+    };
+  }
+
+  return { name:"URL Body Check", icon:"✅", status:"pass", badge:"CLEAN",
+    desc:`Found ${checkedCount} link(s) in message body — no suspicious or shortened destinations detected.`, weight:0 };
+}
+
 
 
 
@@ -2906,6 +3078,7 @@ const CHECK_GLOSSARY = {
   "Number Substitution": "Looks for letters swapped with similar-looking numbers (like 'micr0soft') to imitate a trusted domain name.",
   "Hosted Platform": "Flags domains built on free website-builder platforms, which legitimate businesses rarely use to send official email.",
   "Subject URLs": "Checks for links placed directly in the subject line — an unusual and risky spot for a legitimate sender to put one.",
+  "URL Body Check": "Checks every link in the message body — unwraps Safe Links/Proofpoint/Mimecast-style rewrapped links to see the real destination, and looks for typosquats, look-alike characters, number substitutions, brand names hidden in subdomains, and shorteners that hide where a link actually goes.",
   "Display Name Check": "Compares the sender's display name against their actual domain to catch company names or job titles that don't line up with who's really sending it.",
   "Body Contact Check": "Compares phone numbers or emails listed in the message body against the sender's real domain to catch mismatched contact info.",
   "BEC Language Check": "Scans the wording for phrases common in Business Email Compromise scams — urgency, secrecy, 'kindly advise', wire-transfer language, etc.",
