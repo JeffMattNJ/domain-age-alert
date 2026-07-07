@@ -3,6 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <!-- object-src blocks plugin content (Flash/Java applets) entirely — no functional
+       cost since this app doesn't use any. script-src restricts loading EXTERNAL
+       script files to only this origin plus the Office.js CDN, so an injected
+       reference to an attacker-hosted script file could never load even if some
+       future bug let attacker HTML into the DOM. 'unsafe-inline' stays in
+       script-src because this file's entire app logic lives in one inline
+       script block with no build step — a hash-based lockdown would need manual
+       recalculation on every future edit and would silently break the whole
+       add-in if it ever drifted out of sync, which is a worse failure mode than
+       what it defends against here. connect-src/style-src are intentionally
+       left unrestricted since RDAP lookups hit dynamic per-TLD registrar hosts
+       and the app relies on an inline style block. -->
+  <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; script-src 'self' 'unsafe-inline' https://appsforoffice.microsoft.com;">
   <title>Domain Age Alert</title>
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <style>
@@ -393,6 +406,23 @@
     #passed-container { display: none; }
     #passed-container.open { display: block; }
 
+    /* ── Check name info tooltip ── */
+    .check-name-row { display: flex; align-items: center; gap: 5px; }
+    .info-tip { position: relative; display: inline-flex; align-items: center; cursor: help; }
+    .info-tip .info-dot {
+      width: 13px; height: 13px; border-radius: 50%; background: var(--surface2);
+      color: var(--muted); font-size: 9px; font-weight: 700; line-height: 13px;
+      text-align: center; flex-shrink: 0;
+    }
+    .info-tip .tip-text {
+      visibility: hidden; opacity: 0; position: absolute; bottom: 135%; left: 0;
+      background: #0f1115; color: #e5e7eb; padding: 8px 10px; border-radius: 6px;
+      font-size: 11px; font-weight: 400; line-height: 1.45; width: 200px;
+      z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,0.4); border: 1px solid var(--border);
+      transition: opacity 0.15s ease; pointer-events: none;
+    }
+    .info-tip:hover .tip-text, .info-tip:focus .tip-text { visibility: visible; opacity: 1; }
+
     /* ── Safety loading ── */
     #safety-loading { display: none; text-align: center; padding: 16px; color: var(--muted); font-size: 11px; }
     .mini-spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 8px; }
@@ -419,7 +449,7 @@
     <div style="font-size:24px;margin-bottom:8px;">⚠️</div>
     Could not retrieve domain information.<br>
     <span id="error-detail"></span>
-    <button class="refresh-btn" onclick="retryLookup()">↺ Retry</button>
+    <button class="refresh-btn" id="retry-btn">↺ Retry</button>
   </div>
 
   <div id="main-content">
@@ -512,7 +542,7 @@
       <div class="tip"><div class="tip-dot"></div>Report this email as phishing if it requests personal or financial information.</div>
     </div>
 
-    <button class="refresh-btn" onclick="retryLookup(true)">↺ Refresh (bypass cache)</button>
+    <button class="refresh-btn" id="refresh-bypass-btn">↺ Refresh (bypass cache)</button>
 
     <!-- ⑥ SAFETY LOADING SPINNER -->
     <div id="safety-loading" style="display:none;">
@@ -531,7 +561,7 @@
         <div class="score-track"><div class="score-fill" id="score-fill"></div></div>
       </div>
       <div id="checks-container"></div>
-      <div class="passed-toggle" id="passed-toggle" onclick="togglePassedChecks()">
+      <div class="passed-toggle" id="passed-toggle">
         <span id="passed-toggle-label">Show passed checks</span>
         <span class="chev">▾</span>
       </div>
@@ -583,6 +613,14 @@
 
     // ── Entry point ──────────────────────────────────────────────────────────
     Office.onReady(async () => {
+      // Bind buttons here instead of inline onclick="" attributes — inline
+      // event handlers count as "unsafe-inline" script execution under a
+      // strict Content-Security-Policy, so binding programmatically lets us
+      // lock script-src down without breaking these buttons.
+      document.getElementById("retry-btn")?.addEventListener("click", () => retryLookup());
+      document.getElementById("refresh-bypass-btn")?.addEventListener("click", () => retryLookup(true));
+      document.getElementById("passed-toggle")?.addEventListener("click", togglePassedChecks);
+
       try {
         const item = Office.context.mailbox.item;
         const from = item.from;
@@ -746,7 +784,7 @@
           if (rdapBase) {
             setStatus(`Querying ${rdapBase.replace("https://","").split("/")[0]}…`);
             try {
-              const rdapRes = await fetchWithTimeout(`${rdapBase}domain/${domain}`);
+              const rdapRes = await fetchWithTimeout(`${rdapBase}domain/${encodeURIComponent(domain)}`);
               if (rdapRes.ok) {
                 const raw = await rdapRes.json();
                 ({ createdDate, registrar } = parseRdap(raw));
@@ -761,7 +799,7 @@
       if (!createdDate) {
         setStatus("Trying fallback RDAP server…");
         try {
-          const res = await fetchWithTimeout(`https://rdap.org/domain/${domain}`);
+          const res = await fetchWithTimeout(`https://rdap.org/domain/${encodeURIComponent(domain)}`);
           if (res.ok) {
             const raw = await res.json();
             ({ createdDate, registrar } = parseRdap(raw));
@@ -1042,6 +1080,17 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
   internetHeaders = internetHeaders || "";
   attachments     = attachments     || [];
 
+  // ── Cap body/header size before any check runs ──────────────────────────────
+  // Every keyword/regex check below scans the full string. A deliberately
+  // oversized body or header blob could slow the taskpane down on a single
+  // malicious email. Legitimate content never needs more than this for
+  // pattern matching — real signal (subject line, opening paragraphs,
+  // Authentication-Results headers) is always well within these limits.
+  const MAX_BODY_CHARS    = 50000;   // ~50KB
+  const MAX_HEADER_CHARS  = 100000;  // ~100KB — M365/spam headers run bigger than body
+  if (bodyText.length > MAX_BODY_CHARS) bodyText = bodyText.slice(0, MAX_BODY_CHARS);
+  if (internetHeaders.length > MAX_HEADER_CHARS) internetHeaders = internetHeaders.slice(0, MAX_HEADER_CHARS);
+
   // ── Strip invisible/zero-width characters injected mid-word ────────────────
   // Attackers stitch zero-width spaces, word joiners, soft hyphens, etc. into
   // words like "contract" -> "contra​ct" specifically so keyword-based checks
@@ -1181,7 +1230,7 @@ async function checkDomainAge(domain) {
   try {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 3000);
-    const res   = await fetch(`https://rdap.org/domain/${domain}`, { signal: ctrl.signal });
+    const res   = await fetch(`https://rdap.org/domain/${encodeURIComponent(domain)}`, { signal: ctrl.signal });
     clearTimeout(timer);
 
     if (res.ok) {
@@ -1392,6 +1441,24 @@ function checkHomoglyphs(domain) {
   };
 
   const domainLower = domain.toLowerCase();
+
+  // Punycode/IDN domains (xn--...) are pure ASCII, so they pass the non-ASCII
+  // check below and won't match anything in the homoglyph map either — but the
+  // DECODED form (what actually renders in most mail clients/browsers) can be
+  // a perfect visual match for a trusted brand. This is one of the most common
+  // real-world domain-spoofing techniques and needs its own explicit flag.
+  const labels = domainLower.split(".");
+  if (labels.some(l => l.startsWith("xn--"))) {
+    return {
+      name: "Unicode Spoofing",
+      icon: "🚨",
+      status: "fail",
+      badge: "PUNYCODE/IDN",
+      desc: `Domain "${domain}" uses punycode (IDN) encoding. The version that actually renders in most mail clients can look completely different from this raw form — often a visual match for a trusted brand. Verify manually before trusting this sender.`,
+      weight: 45
+    };
+  }
+
   // Check for non-ASCII characters
   if (!/^[a-z0-9.-]+$/.test(domainLower)) {
     // Find which suspicious chars
@@ -2110,6 +2177,48 @@ function cleanBodyForAnalysis(bodyText) {
   return cleanLines.join("\n").trim();
 }
 
+// ── Known spam-filtering / mail-security relay providers ───────────────────
+// When mail is relayed through one of these before reaching Microsoft 365,
+// the connecting IP at the final hop won't be in the ORIGINAL sender's SPF
+// record (no sender lists a recipient's own spam filter as an authorized
+// sender) — so a softfail here is routing noise, not a spoofing signal.
+const KNOWN_MAIL_SECURITY_RELAYS = [
+  { match:"titanhq.com",          label:"TitanHQ / SpamTitan" },
+  { match:"barracudanetworks.com",label:"Barracuda" },
+  { match:"barracuda.com",        label:"Barracuda" },
+  { match:"mimecast.com",         label:"Mimecast" },
+  { match:"pphosted.com",         label:"Proofpoint" },
+  { match:"ppe-hosted.com",       label:"Proofpoint" },
+  { match:"proofpoint.com",       label:"Proofpoint" },
+  { match:"messagelabs.com",      label:"Symantec Email Security" },
+  { match:"symanteccloud.com",    label:"Symantec Email Security" },
+  { match:"iphmx.com",            label:"Cisco Secure Email" },
+  { match:"sophos.com",           label:"Sophos Email Security" },
+  { match:"trendmicro.com",       label:"Trend Micro Email Security" },
+  { match:"fireeyecloud.com",     label:"Trellix (FireEye) Email Security" },
+  { match:"forcepoint.com",       label:"Forcepoint Email Security" },
+  { match:"hornetsecurity.com",   label:"Hornetsecurity" },
+  { match:"avanan.com",           label:"Avanan (Check Point)" },
+  { match:"avanan.net",           label:"Avanan (Check Point)" },
+  { match:"vadesecure.com",       label:"Vade Secure" },
+  { match:"cloudmark.com",        label:"Cloudmark" },
+  { match:"spamexperts.com",      label:"SolarWinds SpamExperts" },
+  { match:"appriver.com",         label:"AppRiver (Zix)" },
+  { match:"egress.com",           label:"Egress" },
+  { match:"mailguard.com.au",     label:"MailGuard" },
+  { match:"clearswift.com",       label:"Clearswift" },
+];
+
+function detectKnownMailRelay(headers) {
+  if (!headers) return null;
+  const receivedLines = headers.match(/Received:\s*from\s+[^\r\n]+/gi) || [];
+  const haystack = receivedLines.join(" ").toLowerCase();
+  for (const r of KNOWN_MAIL_SECURITY_RELAYS) {
+    if (haystack.includes(r.match)) return r.label;
+  }
+  return null;
+}
+
 // ── Helper: parse Authentication-Results header ───────────────────────────────
 function parseAuthResults(headers) {
   const result = { spf:"none", dkim:"none", dmarc:"none", compauth:"none", reason:"", returnPath:"" };
@@ -2145,11 +2254,30 @@ function checkEmailAuthentication(headers, senderDomain) {
       desc:"Authentication headers not available for this email.", weight:0 };
   }
   const auth = parseAuthResults(headers);
+  const knownRelay = detectKnownMailRelay(headers);
   const issues = [];
   let weight = 0;
 
   if (auth.spf === "fail")     { issues.push("SPF failed — sending server not authorized for this domain"); weight += 30; }
-  else if (auth.spf === "softfail") { issues.push("SPF soft-failed — server is questionable for this domain"); weight += 15; }
+  else if (auth.spf === "softfail") {
+    // A softfail alone often just means the mail was relayed through an
+    // intermediate hop not listed in the sender's SPF record — a spam-filtering
+    // appliance, forwarder, or mailing list — before reaching Microsoft 365.
+    // Compauth is Microsoft's own composite judgment that already factors in
+    // DKIM/DMARC alignment and accounts for exactly this scenario, so a pass
+    // there is trusted on its own. The Received-chain relay match (SpamTitan,
+    // Barracuda, etc.) is NOT trusted on its own, though — the "from X" hostname
+    // in a Received header is just whatever the connecting server claimed via
+    // SMTP HELO/EHLO, which a malicious sender's own mail server could forge
+    // just as easily as a real relay would state it. It only counts alongside
+    // DKIM+DMARC passing, since those are cryptographically verified and can't
+    // be faked by simply claiming a hostname.
+    const relayCorroborated = knownRelay && auth.dkim === "pass" && auth.dmarc === "pass";
+    if (auth.compauth !== "pass" && !relayCorroborated) {
+      issues.push("SPF soft-failed — server is questionable for this domain");
+      weight += 15;
+    }
+  }
 
   if (auth.dkim === "fail")    { issues.push("DKIM failed — message may have been tampered with in transit"); weight += 25; }
   else if (auth.dkim === "none") { issues.push("DKIM not signed — no cryptographic verification of sender"); weight += 8; }
@@ -2168,6 +2296,12 @@ function checkEmailAuthentication(headers, senderDomain) {
   if (issues.length === 0) {
     const passed = [];
     if (auth.spf === "pass")      passed.push("SPF ✓");
+    else if (auth.spf === "softfail") {
+      const why = auth.compauth === "pass"
+        ? "CompAuth confirmed legitimate"
+        : `routed through ${knownRelay}, confirmed via DKIM+DMARC`;
+      passed.push(`SPF softfail (forgiven — ${why})`);
+    }
     if (auth.dkim === "pass")     passed.push("DKIM ✓");
     if (auth.dmarc === "pass")    passed.push("DMARC ✓");
     if (auth.compauth === "pass") passed.push("CompAuth ✓");
@@ -2774,14 +2908,50 @@ function renderSafetyResults(results) {
   }
 }
 
+// ── Plain-language glossary shown on hover next to each check name ─────────
+const CHECK_GLOSSARY = {
+  "Domain Age": "Looks up when the sender's domain was first registered. Domains created recently are a common trait of throwaway scam and phishing setups.",
+  "Known Brand Impersonation": "Checks if the display name is using a well-known brand (Microsoft, PayPal, etc.) while the email actually comes from a domain that brand doesn't own.",
+  "Email Provider": "Flags it when a message claims to be from a business but is actually sent from a free consumer email service like Gmail or Yahoo.",
+  "Reply-To Address": "Checks whether hitting 'reply' would secretly send your response somewhere other than the address the email appears to be from.",
+  "Subject Analysis": "Scans the subject line for urgency language, ALL-CAPS pressure tactics, and words deliberately split or misspelled to dodge filters.",
+  "Domain Spoofing": "Checks whether the sending domain looks randomly generated (few real words, odd letter patterns) — typical of freshly auto-created phishing domains.",
+  "Unicode Spoofing": "Looks for look-alike foreign characters swapped into the domain (e.g. a Cyrillic 'a') that render identically to normal letters but point to a different domain.",
+  "Number Substitution": "Looks for letters swapped with similar-looking numbers (like 'micr0soft') to imitate a trusted domain name.",
+  "Hosted Platform": "Flags domains built on free website-builder platforms, which legitimate businesses rarely use to send official email.",
+  "Subject URLs": "Checks for links placed directly in the subject line — an unusual and risky spot for a legitimate sender to put one.",
+  "Display Name Check": "Compares the sender's display name against their actual domain to catch company names or job titles that don't line up with who's really sending it.",
+  "Body Contact Check": "Compares phone numbers or emails listed in the message body against the sender's real domain to catch mismatched contact info.",
+  "BEC Language Check": "Scans the wording for phrases common in Business Email Compromise scams — urgency, secrecy, 'kindly advise', wire-transfer language, etc.",
+  "CC Recipients": "Looks at who else is CC'd to catch 'thread hijacking' — where an attacker inserts a lookalike address into an existing conversation.",
+  "Financial Request": "Flags language asking for a payment, invoice, or a change to banking details — a hallmark of wire-fraud attempts.",
+  "Org Impersonation": "Checks whether the email is pretending to be from your own organization while actually coming from an outside domain.",
+  "Email Authentication": "Checks the cryptographic proof (SPF/DKIM/DMARC) that verifies a message really came from who it claims to be from, not just a forged 'From' name.",
+  "Spam Signals (M365)": "Uses Microsoft 365's own built-in spam-confidence score for this message, on top of everything this add-in checks separately.",
+  "Thread Integrity": "Checks whether a 'Re:' or 'Fwd:' reply actually matches a real prior conversation, catching fake reply chains used to look trustworthy.",
+  "Attachments": "Scans attached files for risky types and tricks — double file extensions, password-protected archives, or files disguised as something safer.",
+  "Credential Harvesting": "Looks for language and links typically used to trick someone into typing a username and password into a fake login page.",
+  "Gift Card / Crypto": "Flags requests for gift cards, cryptocurrency, or peer-to-peer payment apps — a hallmark of executive-impersonation scams.",
+  "Cloud Link Check": "Flags links to SharePoint, OneDrive, Google Drive, or Dropbox that don't match the sender's real identity — a common credential-phishing lure.",
+  "Hidden Character Check": "Looks for invisible characters hidden inside words — a trick used to sneak trigger words (like 'invoice' or 'wire') past keyword scanners.",
+  "BEC Triple Signal": "Fires when several separate moderate warning signs stack up together at once, which is a stronger indicator of fraud than any single flag alone.",
+  "Combined Risk": "A meta-check that raises the alarm when multiple individual red flags line up into a known attack pattern (e.g. a fake executive + a wire request + urgency)."
+};
+
 function buildCheckCard(c) {
   const bm = {pass:"badge-pass",warn:"badge-warn",fail:"badge-fail",info:"badge-info"};
   const el = document.createElement("div");
   el.className = `check-card ${c.status}`;
+  const tip = CHECK_GLOSSARY[c.name];
+  const tipHtml = tip
+    ? `<span class="info-tip" tabindex="0"><span class="info-dot">?</span><span class="tip-text">${esc(tip)}</span></span>`
+    : "";
   el.innerHTML = `
     <span class="check-icon">${c.icon}</span>
     <div class="check-body">
-      <div class="check-name">${esc(c.name)}</div>
+      <div class="check-name-row">
+        <span class="check-name">${esc(c.name)}</span>${tipHtml}
+      </div>
       <div class="check-desc">${esc(c.desc)}</div>
     </div>
     <span class="chk-badge ${bm[c.status]||'badge-info'}">${esc(c.badge)}</span>`;
