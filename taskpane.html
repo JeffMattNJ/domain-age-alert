@@ -3,19 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <!-- object-src blocks plugin content (Flash/Java applets) entirely — no functional
-       cost since this app doesn't use any. script-src restricts loading EXTERNAL
-       script files to only this origin plus the Office.js CDN, so an injected
-       reference to an attacker-hosted script file could never load even if some
-       future bug let attacker HTML into the DOM. 'unsafe-inline' stays in
-       script-src because this file's entire app logic lives in one inline
-       script block with no build step — a hash-based lockdown would need manual
-       recalculation on every future edit and would silently break the whole
-       add-in if it ever drifted out of sync, which is a worse failure mode than
-       what it defends against here. connect-src/style-src are intentionally
-       left unrestricted since RDAP lookups hit dynamic per-TLD registrar hosts
-       and the app relies on an inline style block. -->
-  <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; script-src 'self' 'unsafe-inline' https://appsforoffice.microsoft.com;">
   <title>Domain Age Alert</title>
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <style>
@@ -613,10 +600,9 @@
 
     // ── Entry point ──────────────────────────────────────────────────────────
     Office.onReady(async () => {
-      // Bind buttons here instead of inline onclick="" attributes — inline
-      // event handlers count as "unsafe-inline" script execution under a
-      // strict Content-Security-Policy, so binding programmatically lets us
-      // lock script-src down without breaking these buttons.
+      // Bind buttons here instead of inline onclick="" attributes — cleaner
+      // separation of markup and behavior, and one less thing to worry about
+      // if a future edit ever needs a stricter security policy.
       document.getElementById("retry-btn")?.addEventListener("click", () => retryLookup());
       document.getElementById("refresh-bypass-btn")?.addEventListener("click", () => retryLookup(true));
       document.getElementById("passed-toggle")?.addEventListener("click", togglePassedChecks);
