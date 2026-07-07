@@ -1599,10 +1599,14 @@ function checkDisplayNameDomainMismatch(displayName, senderDomain, senderEmail) 
     "consulting","advisors","management","capital","bank","financial"
   ];
   const stopWords = new Set([...companySuffixes,"the","and","of","for","a","an"]);
-  const looksLikeCompany = companySuffixes.some(s => nameLower.includes(" "+s) || nameLower.endsWith(s));
+  // Whole-word match only — the old substring check (nameLower.includes(" "+s) ||
+  // nameLower.endsWith(s)) matched "bank" inside surnames like "Banko", flagging
+  // ordinary people as company impersonation.
+  const nameWordsRaw = nameLower.split(/[\s,.-]+/).filter(Boolean);
+  const looksLikeCompany = companySuffixes.some(s => nameWordsRaw.includes(s));
 
   if (looksLikeCompany) {
-    const nameWords = nameLower.split(/[\s,.-]+/).filter(w => w.length > 2 && !stopWords.has(w));
+    const nameWords = nameWordsRaw.filter(w => w.length > 2 && !stopWords.has(w));
     const domainMatches = nameWords.some(w => domainBase.includes(w) || w.includes(domainBase));
     if (!domainMatches && nameWords.length > 0) {
       return {
@@ -2110,13 +2114,24 @@ function cleanBodyForAnalysis(bodyText) {
 function parseAuthResults(headers) {
   const result = { spf:"none", dkim:"none", dmarc:"none", compauth:"none", reason:"", returnPath:"" };
   if (!headers) return result;
-  const spfMatch     = headers.match(/spf=(pass|fail|softfail|neutral|none|permerror|temperror)/i);
+
+  // A message can carry multiple Authentication-Results headers — one per hop
+  // (relays, ESPs, forwarding rules). Only the block M365 itself stamps for
+  // final delivery to this mailbox (the one carrying compauth=) is authoritative.
+  // Blindly taking the FIRST spf= in the whole header blob can grab an earlier,
+  // unrelated hop's result instead — this was the source of false SPF soft-fails
+  // on legitimate mail (e.g. sent via an approved ESP relay in the domain's SPF
+  // record) even though M365's own final verdict was a pass.
+  const arBlocks = headers.match(/Authentication-Results:[\s\S]*?(?=\r?\n[A-Za-z-]+:|$)/gi) || [];
+  const authoritativeBlock = arBlocks.find(b => /compauth=/i.test(b)) || headers;
+
+  const spfMatch     = authoritativeBlock.match(/spf=(pass|fail|softfail|neutral|none|permerror|temperror)/i);
   if (spfMatch) result.spf = spfMatch[1].toLowerCase();
-  const dkimMatch    = headers.match(/dkim=(pass|fail|none|neutral|permerror|temperror)/i);
+  const dkimMatch    = authoritativeBlock.match(/dkim=(pass|fail|none|neutral|permerror|temperror)/i);
   if (dkimMatch) result.dkim = dkimMatch[1].toLowerCase();
-  const dmarcMatch   = headers.match(/dmarc=(pass|fail|none|bestguesspass)/i);
+  const dmarcMatch   = authoritativeBlock.match(/dmarc=(pass|fail|none|bestguesspass)/i);
   if (dmarcMatch) result.dmarc = dmarcMatch[1].toLowerCase();
-  const compauthMatch = headers.match(/compauth=(pass|fail|none|softpass)\s*reason=(\d+)/i);
+  const compauthMatch = authoritativeBlock.match(/compauth=(pass|fail|none|softpass)\s*reason=(\d+)/i);
   if (compauthMatch) { result.compauth = compauthMatch[1].toLowerCase(); result.reason = compauthMatch[2]; }
   const rpMatch = headers.match(/Return-Path:\s*<?[^@]+@([^>)\s]+)/i);
   if (rpMatch) result.returnPath = rpMatch[1].toLowerCase();
