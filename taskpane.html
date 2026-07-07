@@ -380,6 +380,19 @@
     .badge-fail { background: rgba(239,68,68,0.15);  color: var(--danger); }
     .badge-info { background: rgba(99,102,241,0.15); color: var(--accent); }
 
+    /* ── Passed checks toggle ── */
+    .passed-toggle {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 9px 12px; margin-top: 4px; margin-bottom: 6px;
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; user-select: none; font-size: 11px; color: var(--muted); font-weight: 600;
+    }
+    .passed-toggle:hover { background: var(--surface2); }
+    .passed-toggle .chev { transition: transform 0.2s ease; }
+    .passed-toggle.open .chev { transform: rotate(180deg); }
+    #passed-container { display: none; }
+    #passed-container.open { display: block; }
+
     /* ── Safety loading ── */
     #safety-loading { display: none; text-align: center; padding: 16px; color: var(--muted); font-size: 11px; }
     .mini-spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 8px; }
@@ -518,6 +531,11 @@
         <div class="score-track"><div class="score-fill" id="score-fill"></div></div>
       </div>
       <div id="checks-container"></div>
+      <div class="passed-toggle" id="passed-toggle" onclick="togglePassedChecks()">
+        <span id="passed-toggle-label">Show passed checks</span>
+        <span class="chev">▾</span>
+      </div>
+      <div id="passed-container"></div>
     </div>
 
     <!-- ⑧ USER GUIDANCE -->
@@ -853,7 +871,11 @@
       riskEl.textContent      = riskLevel;
       riskEl.className        = `badge ${riskClass}`;
       banner.className        = bannerClass;
-      banner.style.display    = "block";
+      // Only show this standalone banner when domain age itself is a concern.
+      // When it's "safe" (green), the full safety-score panel below already
+      // covers domain age accurately in context — showing a big green banner
+      // here too just contradicts a low overall score and confuses the reader.
+      banner.style.display    = (bannerClass === "safe") ? "none" : "block";
       alertIcon.textContent   = icon;
       alertTitle.textContent  = title;
       alertBody.textContent   = body;
@@ -1019,6 +1041,20 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
   recipientEmail  = recipientEmail  || "";
   internetHeaders = internetHeaders || "";
   attachments     = attachments     || [];
+
+  // ── Strip invisible/zero-width characters injected mid-word ────────────────
+  // Attackers stitch zero-width spaces, word joiners, soft hyphens, etc. into
+  // words like "contract" -> "contra​ct" specifically so keyword-based checks
+  // below (BEC language, financial request, credential harvesting, etc.) can't
+  // string-match them. \p{Cf} covers ZWSP/ZWNJ/ZWJ/word-joiner/BOM/soft-hyphen
+  // and similar invisible "format" characters. Detection of their presence is
+  // handled separately in checkHiddenCharacters — this just cleans the copy
+  // used for matching so nothing downstream is blind to the real words.
+  const rawBodyText = bodyText;
+  const rawSubject  = subject || "";
+  bodyText = bodyText.replace(/\p{Cf}/gu, "");
+  subject  = rawSubject.replace(/\p{Cf}/gu, "");
+
   if (!senderEmail) {
     const item = Office.context.mailbox.item;
     senderEmail     = item.from?.emailAddress?.toLowerCase() || "";
@@ -1069,6 +1105,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
     Promise.resolve(checkUrgencySecrecyAuthority(subject, bodyText)),
     Promise.resolve(checkCloudStoragePhishing(subject, bodyText, senderDomain)),
+    Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
     ]);
 
     setSafetyStatus("");
@@ -1183,24 +1220,24 @@ function buildDomainAgeResult(domain, date) {
 
 // ── CHECK 2: Display name brand impersonation ─────────────────────────────
 function checkDisplayName(name, email, domain) {
-  if (!name) return { name:"Sender Identity", icon:"✅", status:"pass", badge:"OK",
+  if (!name) return { name:"Known Brand Impersonation", icon:"✅", status:"pass", badge:"OK",
     desc:"No display name spoofing detected.", weight:0 };
 
   const nl = name.toLowerCase();
   for (const { brand, domains } of BRANDS) {
     if (nl.includes(brand)) {
       const match = domains.some(d => domain === d || domain.endsWith("."+d));
-      if (!match) return { name:"Sender Identity", icon:"🚨", status:"fail", badge:"SPOOFED NAME",
+      if (!match) return { name:"Known Brand Impersonation", icon:"🚨", status:"fail", badge:"SPOOFED NAME",
         desc:`Display name contains "${brand}" but email is from ${domain}. Classic impersonation tactic.`, weight:35 };
     }
   }
   const emailInName = nl.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/);
   if (emailInName && emailInName[0] !== email) {
-    return { name:"Sender Identity", icon:"⚠️", status:"warn", badge:"NAME MISMATCH",
+    return { name:"Known Brand Impersonation", icon:"⚠️", status:"warn", badge:"NAME MISMATCH",
       desc:"Display name contains a different email address than the actual sender.", weight:20 };
   }
-  return { name:"Sender Identity", icon:"✅", status:"pass", badge:"OK",
-    desc:`Display name "${name}" shows no brand impersonation.`, weight:0 };
+  return { name:"Known Brand Impersonation", icon:"✅", status:"pass", badge:"OK",
+    desc:`Display name "${name}" shows no known-brand impersonation.`, weight:0 };
 }
 
 // ── CHECK 3: Free provider check ─────────────────────────────────────────
@@ -1251,14 +1288,22 @@ function checkSubject(subject) {
   else if (found.length === 1) { issues.push(`Contains phishing phrase: "${found[0]}"`); weight += 8; }
 
   // Space inserted mid-word to bypass spam filters — "Pac kage", "Pa yment", "Inv oice"
-  // Pattern: word ends mid-sequence with a space then continues
-  const spacedWordPattern = /[a-z]{2,}(?:[a-z]) [a-z]{2,}/gi;
+  // Only fires when the de-spaced word matches a known lure term — matching ANY two
+  // adjacent words over 5 chars (the old approach) false-positived on ordinary phrases
+  // like "Mattnj Settlement".
+  const spacedWordPattern = /[a-z]{2,}(?:[a-z]) [a-z]{2,}/gi;
   const spacedMatches = subject.match(spacedWordPattern) || [];
-  // Filter to likely intentional splits (combined word > 5 chars, no common two-word phrases)
   const commonPhrases = new Set(['in the','of the','to the','on the','at the','by the','is a','it is','do not','can not','will be']);
+  const SPACED_EVASION_WORDS = [
+    'package','invoice','payment','urgent','verify','verified','suspend','suspended',
+    'account','security','confirm','confirmed','delivery','tracking','wire','transfer',
+    'giftcard','login','password','refund','statement','overdue','expired','locked',
+    'restricted','reset','voicemail'
+  ];
   const suspiciousSpaces = spacedMatches.filter(m => {
-    const combined = m.replace(' ','').toLowerCase();
-    return combined.length > 5 && !commonPhrases.has(m.toLowerCase());
+    const combined = m.replace(/\s+/g,'').toLowerCase();
+    if (combined.length <= 5 || commonPhrases.has(m.toLowerCase())) return false;
+    return SPACED_EVASION_WORDS.some(w => combined === w || combined.includes(w));
   });
   if (suspiciousSpaces.length > 0) {
     issues.push(`Subject contains word(s) with suspicious spacing: "${suspiciousSpaces[0]}" — possible spam filter bypass attempt`);
@@ -2524,6 +2569,54 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
   };
 }
 
+// ── HIDDEN CHARACTER INJECTION CHECK ────────────────────────────────────────
+// Detects invisible Unicode characters (zero-width space/joiner, word joiner,
+// soft hyphen, BOM, etc. — Unicode category Cf) stitched between letters of a
+// word, e.g. "contra​ct" or "pur​chase" rendered as tofu boxes in some clients.
+// This is a content-scanning evasion technique, not a rendering glitch — it
+// exists specifically to defeat keyword-based checks (BEC language, financial
+// request, credential harvesting, cloud-phishing lure words, etc.), so its
+// mere presence is itself a strong, independent red flag regardless of which
+// word it targets. Runs on the RAW (unstripped) subject/body — every other
+// check runs on the cleaned copy so it can still see the real words.
+function checkHiddenCharacters(subject, bodyText) {
+  const combined = `${subject || ""} ${bodyText || ""}`;
+
+  if (!combined.trim()) {
+    return { name:"Hidden Character Check", icon:"✅", status:"pass", badge:"CLEAN",
+      desc:"No content to analyze.", weight:0 };
+  }
+
+  // Only counts when an invisible/format character sits directly between two
+  // letters — a trailing zero-width space at the end of a signature or a lone
+  // BOM at the start of a message is common and benign, so those don't count.
+  const injectionPattern = /[a-zA-Z]+(?:\p{Cf}+[a-zA-Z]+)+/gu;
+  const matches = combined.match(injectionPattern) || [];
+
+  if (matches.length === 0) {
+    return { name:"Hidden Character Check", icon:"✅", status:"pass", badge:"CLEAN",
+      desc:"No hidden characters detected within words.", weight:0 };
+  }
+
+  // Show the affected word(s) with the invisible characters stripped so the
+  // person can actually see what word was being disguised.
+  const cleanedWords = [...new Set(matches.map(m => m.replace(/\p{Cf}/gu, "")))];
+  const sample = cleanedWords.slice(0, 2).join('", "');
+
+  if (matches.length >= 3) {
+    return {
+      name:"Hidden Character Check", icon:"🚨", status:"fail", badge:"CHARACTER INJECTION",
+      desc:`${matches.length} words contain invisible characters inserted mid-word (e.g. "${sample}") — a known technique to hide trigger words like "contract" or "invoice" from content scanners. Strong evasion signal.`,
+      weight:30
+    };
+  }
+  return {
+    name:"Hidden Character Check", icon:"⚠️", status:"warn", badge:"HIDDEN CHARACTERS",
+    desc:`Word(s) contain invisible characters that disguise them from content scanning: "${sample}" — this can be used to evade keyword-based filtering. Worth a closer look.`,
+    weight:18
+  };
+}
+
 
 // ── Render safety percentage circle ─────────────────────────────────────────
 function renderSafetyCircle(safeScore, results, bannerClass) {
@@ -2631,28 +2724,65 @@ function renderSafetyResults(results) {
   fill.style.width      = `${safe}%`;
   fill.style.background = barColor;
 
-  // Check cards — failures first
+  // Check cards — failures first. Only fail/warn/info render directly;
+  // pure "pass" checks go in the collapsed section below so the panel
+  // isn't 24 mostly-green cards deep when only 2-3 things actually matter.
   const sorted = [...results].sort((a,b) => {
     const o = {fail:0,warn:1,info:2,pass:3};
     return (o[a.status]||3)-(o[b.status]||3);
   });
 
+  const flagged = sorted.filter(c => c.status !== "pass");
+  const passed  = sorted.filter(c => c.status === "pass");
+
   const container = document.getElementById("checks-container");
   container.innerHTML = "";
-
-  for (const c of sorted) {
-    const bm = {pass:"badge-pass",warn:"badge-warn",fail:"badge-fail",info:"badge-info"};
-    const el = document.createElement("div");
-    el.className = `check-card ${c.status}`;
-    el.innerHTML = `
-      <span class="check-icon">${c.icon}</span>
-      <div class="check-body">
-        <div class="check-name">${esc(c.name)}</div>
-        <div class="check-desc">${esc(c.desc)}</div>
-      </div>
-      <span class="chk-badge ${bm[c.status]||'badge-info'}">${esc(c.badge)}</span>`;
-    container.appendChild(el);
+  for (const c of flagged) {
+    container.appendChild(buildCheckCard(c));
   }
+
+  const passedContainer = document.getElementById("passed-container");
+  passedContainer.innerHTML = "";
+  for (const c of passed) {
+    passedContainer.appendChild(buildCheckCard(c));
+  }
+
+  const toggle = document.getElementById("passed-toggle");
+  const toggleLabel = document.getElementById("passed-toggle-label");
+  if (passed.length === 0) {
+    toggle.style.display = "none";
+  } else {
+    toggle.style.display = "flex";
+    toggleLabel.textContent = `Show ${passed.length} passed check${passed.length !== 1 ? "s" : ""}`;
+    toggle.classList.remove("open");
+    passedContainer.classList.remove("open");
+  }
+}
+
+function buildCheckCard(c) {
+  const bm = {pass:"badge-pass",warn:"badge-warn",fail:"badge-fail",info:"badge-info"};
+  const el = document.createElement("div");
+  el.className = `check-card ${c.status}`;
+  el.innerHTML = `
+    <span class="check-icon">${c.icon}</span>
+    <div class="check-body">
+      <div class="check-name">${esc(c.name)}</div>
+      <div class="check-desc">${esc(c.desc)}</div>
+    </div>
+    <span class="chk-badge ${bm[c.status]||'badge-info'}">${esc(c.badge)}</span>`;
+  return el;
+}
+
+function togglePassedChecks() {
+  const toggle = document.getElementById("passed-toggle");
+  const passedContainer = document.getElementById("passed-container");
+  const label = document.getElementById("passed-toggle-label");
+  const isOpen = passedContainer.classList.toggle("open");
+  toggle.classList.toggle("open", isOpen);
+  const count = passedContainer.children.length;
+  label.textContent = isOpen
+    ? `Hide ${count} passed check${count !== 1 ? "s" : ""}`
+    : `Show ${count} passed check${count !== 1 ? "s" : ""}`;
 }
 
 function setSafetyStatus(msg) {
