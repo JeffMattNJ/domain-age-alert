@@ -479,6 +479,50 @@
       <span class="alert-reason" id="alert-reason"></span>
     </div>
 
+    <!-- ⑥ SAFETY LOADING SPINNER -->
+    <div id="safety-loading" style="display:none;">
+      <div class="mini-spinner"></div>
+      Running safety checks…<br>
+      <span id="safety-status" style="font-size:10px;color:var(--muted)"></span>
+    </div>
+
+    <!-- ⑦ FULL SAFETY CHECK RESULTS — flags sorted red first -->
+    <div id="safety-section" style="display:none;">
+      <div class="safety-title">Safety Check Results</div>
+      <div class="score-wrap">
+        <div class="score-label-row">
+          <span>Safety Score</span><span id="score-num"></span>
+        </div>
+        <div class="score-track"><div class="score-fill" id="score-fill"></div></div>
+      </div>
+      <div id="checks-container"></div>
+      <div class="passed-toggle" id="passed-toggle">
+        <span id="passed-toggle-label">Show passed checks</span>
+        <span class="chev">▾</span>
+      </div>
+      <div id="passed-container"></div>
+    </div>
+
+    <!-- ⑧ USER GUIDANCE -->
+    <div class="guidance-box" id="guidance-box" style="display:none;">
+      <div class="guidance-title">💬 What should I do?</div>
+      <div class="guidance-item">
+        <div class="guidance-num">1</div>
+        <div><strong style="color:var(--text);">Were you expecting this email?</strong><br>
+        If yes and the sender is familiar, use your best judgment. If no, treat it with extra caution.</div>
+      </div>
+      <div class="guidance-item">
+        <div class="guidance-num">2</div>
+        <div><strong style="color:var(--text);">If you know these people — call and confirm.</strong><br>
+        Before clicking any links or responding, verify by phone or in person using a known number — not one from the email itself.</div>
+      </div>
+      <div class="guidance-item">
+        <div class="guidance-num">3</div>
+        <div><strong style="color:var(--text);">If you don't recognize the sender — delete it.</strong><br>
+        Do not click links, open attachments, or reply. Report it as phishing using the Report button in Outlook.</div>
+      </div>
+    </div>
+
     <!-- ③ DOMAIN AGE BANNER — verdict from domain age check -->
     <div id="alert-banner">
       <div class="alert-header">
@@ -530,50 +574,6 @@
     </div>
 
     <button class="refresh-btn" id="refresh-bypass-btn">↺ Refresh (bypass cache)</button>
-
-    <!-- ⑥ SAFETY LOADING SPINNER -->
-    <div id="safety-loading" style="display:none;">
-      <div class="mini-spinner"></div>
-      Running safety checks…<br>
-      <span id="safety-status" style="font-size:10px;color:var(--muted)"></span>
-    </div>
-
-    <!-- ⑦ FULL SAFETY CHECK RESULTS — flags sorted red first -->
-    <div id="safety-section" style="display:none;">
-      <div class="safety-title">Safety Check Results</div>
-      <div class="score-wrap">
-        <div class="score-label-row">
-          <span>Safety Score</span><span id="score-num"></span>
-        </div>
-        <div class="score-track"><div class="score-fill" id="score-fill"></div></div>
-      </div>
-      <div id="checks-container"></div>
-      <div class="passed-toggle" id="passed-toggle">
-        <span id="passed-toggle-label">Show passed checks</span>
-        <span class="chev">▾</span>
-      </div>
-      <div id="passed-container"></div>
-    </div>
-
-    <!-- ⑧ USER GUIDANCE -->
-    <div class="guidance-box" id="guidance-box" style="display:none;">
-      <div class="guidance-title">💬 What should I do?</div>
-      <div class="guidance-item">
-        <div class="guidance-num">1</div>
-        <div><strong style="color:var(--text);">Were you expecting this email?</strong><br>
-        If yes and the sender is familiar, use your best judgment. If no, treat it with extra caution.</div>
-      </div>
-      <div class="guidance-item">
-        <div class="guidance-num">2</div>
-        <div><strong style="color:var(--text);">If you know these people — call and confirm.</strong><br>
-        Before clicking any links or responding, verify by phone or in person using a known number — not one from the email itself.</div>
-      </div>
-      <div class="guidance-item">
-        <div class="guidance-num">3</div>
-        <div><strong style="color:var(--text);">If you don't recognize the sender — delete it.</strong><br>
-        Do not click links, open attachments, or reply. Report it as phishing using the Report button in Outlook.</div>
-      </div>
-    </div>
 
     <!-- ⑨ LEGAL DISCLAIMER -->
     <div class="disclaimer">
