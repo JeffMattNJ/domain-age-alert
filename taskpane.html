@@ -1136,7 +1136,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText, recipientDomain)),
       Promise.resolve(checkFinancialRequest(subject, bodyText)),
       Promise.resolve(checkOrgImpersonation(subject, bodyText, senderDomain, recipientDomain)),
-    Promise.resolve(checkEmailAuthentication(internetHeaders, senderDomain)),
+    Promise.resolve(checkEmailAuthentication(internetHeaders, senderDomain, recipientDomain)),
     Promise.resolve(checkMicrosoftSpamSignals(internetHeaders)),
     Promise.resolve(checkThreadIntegrity(subject, internetHeaders)),
     Promise.resolve(checkAttachments(attachments, bodyText)),
@@ -2417,13 +2417,36 @@ function parseAuthResults(headers) {
 }
 
 // ── CHECK: Email Authentication (SPF/DKIM/DMARC/compauth/Return-Path) ─────────
-function checkEmailAuthentication(headers, senderDomain) {
+// ── Helper: is this mail internal-to-internal? ──────────────────────────────
+// Microsoft's own antispam pipeline tags every message's directionality in
+// X-Forefront-Antispam-Report as DIR:INT (internal-to-internal), DIR:INB
+// (inbound external), or DIR:OUT (outbound external). DKIM signing happens at
+// the outbound gateway for mail actually LEAVING the organization — it proves
+// authenticity to an external mail system. Mail that never crosses that
+// boundary is authenticated by Exchange's own internal transport instead, so
+// dkim=none/dmarc=none is expected and correct for DIR:INT mail, not a red
+// flag. Using Microsoft's own tag as the primary signal, since it's the same
+// one Microsoft's own filtering already relies on — but that header's format
+// could change or go missing under a different security stack, so senderDomain
+// matching the logged-in user's own domain is a simple, always-available
+// fallback that doesn't depend on any particular header surviving intact.
+function isInternalMail(headers, senderDomain, recipientDomain) {
+  if (senderDomain && recipientDomain && senderDomain.toLowerCase() === recipientDomain.toLowerCase()) {
+    return true;
+  }
+  if (!headers) return false;
+  const match = headers.match(/X-Forefront-Antispam-Report:[\s\S]*?DIR:(\w+)/i);
+  return !!match && match[1].toUpperCase() === "INT";
+}
+
+function checkEmailAuthentication(headers, senderDomain, recipientDomain) {
   if (!headers) {
     return { name:"Email Authentication", icon:"❓", status:"info", badge:"UNAVAILABLE",
       desc:"Authentication headers not available for this email.", weight:0 };
   }
   const auth = parseAuthResults(headers);
   const knownRelay = detectKnownMailRelay(headers);
+  const internal = isInternalMail(headers, senderDomain, recipientDomain);
   const issues = [];
   let weight = 0;
 
@@ -2449,10 +2472,10 @@ function checkEmailAuthentication(headers, senderDomain) {
   }
 
   if (auth.dkim === "fail")    { issues.push("DKIM failed — message may have been tampered with in transit"); weight += 25; }
-  else if (auth.dkim === "none") { issues.push("DKIM not signed — no cryptographic verification of sender"); weight += 8; }
+  else if (auth.dkim === "none" && !internal) { issues.push("DKIM not signed — no cryptographic verification of sender"); weight += 8; }
 
   if (auth.dmarc === "fail")   { issues.push("DMARC failed — sender domain does not align with authentication. Strong spoofing indicator"); weight += 35; }
-  else if (auth.dmarc === "none") { issues.push("DMARC policy not set — domain has no spoofing protection configured"); weight += 5; }
+  else if (auth.dmarc === "none" && !internal) { issues.push("DMARC policy not set — domain has no spoofing protection configured"); weight += 5; }
 
   if (auth.compauth === "fail") { issues.push(`Microsoft composite authentication failed (reason ${auth.reason})`); weight += 30; }
 
@@ -2472,7 +2495,9 @@ function checkEmailAuthentication(headers, senderDomain) {
       passed.push(`SPF softfail (forgiven — ${why})`);
     }
     if (auth.dkim === "pass")     passed.push("DKIM ✓");
+    else if (auth.dkim === "none" && internal) passed.push("DKIM not required (internal mail)");
     if (auth.dmarc === "pass")    passed.push("DMARC ✓");
+    else if (auth.dmarc === "none" && internal) passed.push("DMARC not required (internal mail)");
     if (auth.compauth === "pass") passed.push("CompAuth ✓");
     return { name:"Email Authentication", icon:"✅", status:"pass", badge:"VERIFIED",
       desc:`All authentication checks passed: ${passed.join(", ") || "verified by M365"}.`, weight:0 };
