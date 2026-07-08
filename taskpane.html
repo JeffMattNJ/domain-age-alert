@@ -1152,6 +1152,40 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
 
     const results = [domainAgeResult, ...instantResults];
 
+    // A domain that "looks random" (few vowels, reads as gibberish) is a much
+    // weaker signal on its own than it seems — plenty of real companies have
+    // acronym-style or invented names (TD SYNNEX, etc.). Phishing domains that
+    // trip this heuristic are almost always ALSO freshly registered, so domain
+    // age is strong corroborating evidence: if RDAP confirms the domain has
+    // been established for over a year, the vowel-ratio guess is very likely
+    // a false positive and gets downgraded rather than dragging a legitimate
+    // sender into a caution banner.
+    const randomDomainFlag = results.find(r => r.name === "Domain Spoofing" && r.badge === "RANDOM DOMAIN");
+    if (randomDomainFlag && domainAgeResult.badge === "ESTABLISHED") {
+      // Age alone should only fully clear this when nothing else about the
+      // sender's identity is also suspicious. An aged domain that STILL shows
+      // a spoofed display name or disguised content is a known attacker
+      // pattern (sitting on or acquiring an aged domain specifically to
+      // defeat age-based trust) — age shouldn't erase that combination, only
+      // the case where the domain is the sole odd thing about the email.
+      const hasOtherIdentityFlag = results.some(r =>
+        (r.name === "Display Name Check" && r.status !== "pass") ||
+        (r.name === "Known Brand Impersonation" && r.status !== "pass") ||
+        (r.name === "Hidden Character Check" && r.status !== "pass")
+      );
+
+      if (!hasOtherIdentityFlag) {
+        randomDomainFlag.status = "pass";
+        randomDomainFlag.icon   = "✅";
+        randomDomainFlag.badge  = "LOOKS CLEAN";
+        randomDomainFlag.desc   = `"${senderDomain}" reads as consonant-heavy, but it's a well-established domain with no other identity red flags — companies with acronym-style names trip this pattern often, so age is treated as stronger evidence here.`;
+        randomDomainFlag.weight = 0;
+      } else {
+        randomDomainFlag.desc = `"${senderDomain}" appears to be a randomly generated domain name AND the sender's identity has other red flags — age reduces but doesn't clear this combination.`;
+        randomDomainFlag.weight = 10;
+      }
+    }
+
     // ── Combination multipliers ─────────────────────────────────────────────────
     const hasNameMismatch    = results.some(r => r.name === "Display Name Check" && (r.status === "warn" || r.status === "fail"));
     const hasFinancialFlag   = results.some(r => r.name === "Financial Request" && r.status === "warn");
@@ -1371,7 +1405,22 @@ function checkSubject(subject) {
 }
 
 // ── CHECK 6: Lookalike / typosquat domain ─────────────────────────────────
+// ── Known trusted partner/vendor/client domains ─────────────────────────────
+// Add domains here that you know are legitimate but keep tripping the
+// heuristic checks below — usually because the name is short on vowels or
+// looks like an acronym (e.g. "tdsynnex" reads as gibberish to the vowel-ratio
+// check even though TD SYNNEX is a real, major IT distributor). This always
+// wins over the pattern-matching checks; add to it whenever a real client or
+// vendor gets flagged. One domain per line, lowercase, no "www."
+const TRUSTED_PARTNER_DOMAINS = [
+  "tdsynnex.com",
+];
+
 function checkLookalike(domain) {
+  if (TRUSTED_PARTNER_DOMAINS.includes(domain)) {
+    return { name:"Domain Spoofing", icon:"✅", status:"pass", badge:"TRUSTED",
+      desc:`"${domain}" is on the known-partner allowlist.`, weight:0 };
+  }
   for (const { real, patterns } of LOOKALIKES) {
     if (patterns.some(p => domain.includes(p))) {
       return { name:"Domain Spoofing", icon:"🚨", status:"fail", badge:"LOOKALIKE",
