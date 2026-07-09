@@ -1794,6 +1794,15 @@ function checkBodyUrls(bodyText, senderDomain) {
     const labels = destHost.split(".");
     const baseDomain = labels.length > 2 ? labels.slice(-2).join(".") : destHost;
 
+    // A link back to the sender's own domain can't be "impersonating" anyone —
+    // it just IS that domain. Skip every suspicion heuristic below entirely
+    // for this case (not just the scheme/encoding advisories) — otherwise a
+    // perfectly normal "visit our website" link from a consonant-heavy but
+    // legitimate company (mscnj.com, tdsynnex.com, etc.) gets flagged as
+    // impersonating itself, which is exactly backwards.
+    const isSameAsSender = senderBaseDomain && baseDomain === senderBaseDomain;
+    if (isSameAsSender) continue;
+
     // Brand-in-subdomain / brand+credential-word tricks — these specifically
     // need the FULL hostname (not just the base domain) since the trick lives
     // in the subdomain or in extra words tacked onto the domain itself.
@@ -1816,21 +1825,14 @@ function checkBodyUrls(bodyText, senderDomain) {
     } else {
       // Low-weight, informational only — HTTPS/encoding alone don't make a
       // link safe or unsafe, so these never escalate past a soft advisory.
-      // Skipped entirely for links back to the sender's own domain (e.g. a
-      // company's own website linked from an internal email) — the actual
-      // destination domain is what matters, not its URL scheme or formatting,
-      // and flagging your own organization's domain for using http:// is
-      // noise, not signal. Known rewrappers/ESP tracking links are also
-      // excluded from the encoding check since long, heavily-encoded URLs
-      // are completely routine for those (we already unwrap the ones we
-      // recognize above).
-      const isSameAsSender = senderBaseDomain && baseDomain === senderBaseDomain;
-      if (!isSameAsSender) {
-        if (/^http:\/\//i.test(destUrl)) {
-          advisories.push(`${destHost} uses unencrypted http:// rather than https://`);
-        } else if (!unwrapped && destUrl.length > 200 && (destUrl.match(/[%=&]/g) || []).length > 8) {
-          advisories.push(`${destHost} link is very long and heavily encoded — worth a closer look before clicking`);
-        }
+      // (Same-domain links already skipped entirely above, before reaching
+      // this point.) Known rewrappers/ESP tracking links are excluded from
+      // the encoding check since long, heavily-encoded URLs are completely
+      // routine for those (we already unwrap the ones we recognize above).
+      if (/^http:\/\//i.test(destUrl)) {
+        advisories.push(`${destHost} uses unencrypted http:// rather than https://`);
+      } else if (!unwrapped && destUrl.length > 200 && (destUrl.match(/[%=&]/g) || []).length > 8) {
+        advisories.push(`${destHost} link is very long and heavily encoded — worth a closer look before clicking`);
       }
     }
   }
