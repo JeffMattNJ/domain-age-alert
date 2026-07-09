@@ -1756,7 +1756,8 @@ function checkBodyUrls(bodyText, senderDomain) {
   if (urls.length === 0) return { name:"URL Body Check", icon:"✅", status:"pass", badge:"NONE",
     desc:"No links found in message body.", weight:0 };
 
-  const suspicious = [];
+  const suspicious = [];      // high-confidence: confirmed typosquat, homoglyph/punycode, brand tricks
+  const lowConfidence = [];   // low-confidence: vowel-ratio guess, hyphen count, TLD alone
   const shortened   = [];
   const advisories  = [];
   let checkedCount  = 0;
@@ -1812,16 +1813,27 @@ function checkBodyUrls(bodyText, senderDomain) {
     // Reuse the same lookalike/homoglyph/number-substitution/punycode logic
     // already built for sender domains — a phishing link is just as often a
     // typosquat, IDN homograph, or "am4z0n.com"-style substitution as a
-    // phishing sender domain is.
+    // phishing sender domain is. checkLookalike itself already distinguishes
+    // confidence levels internally (a confirmed brand typosquat is "fail";
+    // the vowel-ratio "random domain" guess, hyphen count, and TLD-alone
+    // checks are "warn") — respect that distinction here instead of flattening
+    // every non-pass result into the same severe verdict. The vowel-ratio
+    // heuristic specifically is what kept false-positiving on real companies
+    // with acronym-style names (TD SYNNEX, mscnj.com) — it's a weak signal on
+    // its own and shouldn't carry the same weight as an actual pattern match.
     const lookalikeResult   = checkLookalike(baseDomain);
     const homoglyphResult   = checkHomoglyphs(baseDomain);
     const substitutionResult = checkNumberSubstitution(baseDomain);
-    if (lookalikeResult.status !== "pass") {
+    if (lookalikeResult.status === "fail") {
       suspicious.push(`${destHost} — ${lookalikeResult.desc}`);
     } else if (homoglyphResult.status !== "pass") {
+      // Homoglyph/punycode is always high-confidence — there's no legitimate
+      // reason for a non-ASCII or punycode-encoded link destination.
       suspicious.push(`${destHost} — ${homoglyphResult.desc}`);
     } else if (substitutionResult.status !== "pass") {
       suspicious.push(`${destHost} — ${substitutionResult.desc}`);
+    } else if (lookalikeResult.status === "warn") {
+      lowConfidence.push(`${destHost} — ${lookalikeResult.desc}`);
     } else {
       // Low-weight, informational only — HTTPS/encoding alone don't make a
       // link safe or unsafe, so these never escalate past a soft advisory.
@@ -1842,6 +1854,14 @@ function checkBodyUrls(bodyText, senderDomain) {
       name: "URL Body Check", icon: "🚨", status: "fail", badge: "SUSPICIOUS LINK",
       desc: `Message body contains a suspicious link destination: ${suspicious[0]}`,
       weight: 35
+    };
+  }
+
+  if (lowConfidence.length > 0) {
+    return {
+      name: "URL Body Check", icon: "⚠️", status: "warn", badge: "WORTH A LOOK",
+      desc: `Message body contains a link whose destination looks unusual: ${lowConfidence[0]}. This is a weaker, heuristic-only signal — plenty of real companies have acronym-style domain names, so this is worth a glance rather than automatic distrust.`,
+      weight: 10
     };
   }
 
