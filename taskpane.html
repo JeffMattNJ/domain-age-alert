@@ -2165,35 +2165,46 @@ function checkBECLanguage(subject, bodyText) {
     return { name:"BEC Language Check", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
   }
 
-  // BEC-specific language patterns (different from generic phishing keywords)
-  const becPatterns = [
-    // Urgency + vagueness — deliberately excludes generic business urgency
-    // words like "asap"/"as soon as possible"/"prompt response"/"time
-    // sensitive". Those are ubiquitous in ordinary business English (a
-    // service manager saying "we'll reach out asap" is completely normal)
-    // and must not trigger on their own, same principle already applied to
-    // "immediately" elsewhere. Only the more distinctly BEC-flavored,
-    // less-common phrasings below count here.
-    "urgent inquiry","urgent requirement","urgent request","urgent matter",
-    "kindly advise","kindly confirm","kindly revert","at your earliest convenience",
+  // Two confidence tiers, same principle as the URL Body Check split:
+  // financial/isolation/gift-card language essentially never appears in
+  // genuine correspondence and is meaningful on its own. Generic urgency and
+  // politeness phrasing ("urgent matter", "kindly advise", "at your earliest
+  // convenience") is completely ordinary in real business and legal writing
+  // — what actually distinguishes malicious urgency isn't the vocabulary,
+  // it's what it's paired with (a financial ask, an isolation instruction).
+  // So these weak signals only count once there's more than one of them, or
+  // they show up alongside an actual strong signal.
+  const strongBECPatterns = [
     // Wire transfer / financial BEC
     "wire transfer","bank transfer","change of account","new bank details",
     "updated banking","payment details have changed","new account number",
     "transfer funds","remit payment","remittance",
-    // Authority impersonation
-    "on behalf of","writing on behalf","our subsidiary","newly initiated",
-    "recognized expertise","significant value","mutual benefit",
     // Isolation tactics
     "keep this confidential","do not discuss","between us","privately",
     "do not reply to this email","contact me directly","use this number",
     // Gift card / executive fraud
     "gift card","itunes card","google play","buy cards","need a favor",
+  ];
+  const weakBECPatterns = [
+    // Urgency + vagueness — deliberately excludes generic business urgency
+    // words like "asap"/"as soon as possible"/"prompt response"/"time
+    // sensitive". Those are ubiquitous in ordinary business English (a
+    // service manager saying "we'll reach out asap" is completely normal)
+    // and must not trigger on their own, same principle already applied to
+    // "immediately" elsewhere.
+    "urgent inquiry","urgent requirement","urgent request","urgent matter",
+    "kindly advise","kindly confirm","kindly revert","at your earliest convenience",
+    // Authority impersonation
+    "on behalf of","writing on behalf","our subsidiary","newly initiated",
+    "recognized expertise","significant value","mutual benefit",
     "available right now","are you available","can you help me with something",
   ];
 
-  const found = becPatterns.filter(p => combined.includes(p));
+  const strongFound = strongBECPatterns.filter(p => combined.includes(p));
+  const weakFound   = weakBECPatterns.filter(p => combined.includes(p));
+  const found = [...strongFound, ...weakFound];
 
-  if (found.length >= 3) {
+  if (strongFound.length >= 2 || (strongFound.length >= 1 && weakFound.length >= 1) || weakFound.length >= 3) {
     return {
       name: "BEC Language Check",
       icon: "🚨",
@@ -2203,7 +2214,7 @@ function checkBECLanguage(subject, bodyText) {
       weight: 35
     };
   }
-  if (found.length >= 1) {
+  if (strongFound.length >= 1 || weakFound.length >= 2) {
     return {
       name: "BEC Language Check",
       icon: "⚠️",
