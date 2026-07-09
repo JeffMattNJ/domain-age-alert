@@ -1696,6 +1696,7 @@ const LINK_REWRAPPERS = [
   { match: "protect-us.mimecast.com",           param: "u" },    // Mimecast
   { match: "protect2.fireeye.com",              param: "u" },    // Trellix/FireEye
   { match: "linkprotect.cudasvc.com",           param: "a" },    // Barracuda Link Protect
+  { match: "linklock.titanhq.com",              param: "url" },  // TitanHQ/SpamTitan LinkLock — mattnj's own relay
 ];
 
 const URL_SHORTENERS = [
@@ -2488,7 +2489,48 @@ function isInternalMail(headers, senderDomain, recipientDomain) {
   return !!match && match[1].toUpperCase() === "INT";
 }
 
-function checkEmailAuthentication(headers, senderDomain, recipientDomain) {
+// ── Helper: does the sender domain's OWN SPF record authorize Microsoft 365? ──
+// The softfail/fail verdict Microsoft reports is based on the CONNECTING IP at
+// the final hop — which, once mail passes through mattnj's own TitanHQ relay,
+// is TitanHQ's IP, not the sender's real infrastructure. That produces a false
+// failure regardless of how correctly the sender's domain is configured. Rather
+// than inferring this indirectly (compauth, relay-name matching), this checks
+// the domain's actual published SPF record directly: if the domain owner has
+// explicitly authorized spf.protection.outlook.com, they've told us Microsoft
+// 365 is legitimate sending infrastructure for their mail — a failure that
+// happens at OUR relay hop, after that point, isn't evidence of spoofing.
+const SPF_CACHE_PREFIX = "spf_rec_";
+const SPF_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h, same as RDAP
+
+async function fetchSpfAuthorizesM365(domain) {
+  if (!domain) return false;
+  try {
+    const cached = getCache(SPF_CACHE_PREFIX + domain);
+    if (cached && (Date.now() - cached.ts) < SPF_CACHE_TTL_MS) {
+      return !!cached.includesM365;
+    }
+  } catch (_) {}
+
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const res   = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=TXT`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return false;
+
+    const data = await res.json();
+    const txtRecords = (data.Answer || []).map(a => (a.data || "").replace(/^"|"$/g, ""));
+    const spfRecord = txtRecords.find(t => t.startsWith("v=spf1"));
+    const includesM365 = !!spfRecord && /include:spf\.protection\.outlook\.com/i.test(spfRecord);
+
+    try { setCache(SPF_CACHE_PREFIX + domain, { includesM365, ts: Date.now() }); } catch (_) {}
+    return includesM365;
+  } catch (_) {
+    return false; // silent fail-open — never penalize or crash on a lookup error
+  }
+}
+
+async function checkEmailAuthentication(headers, senderDomain, recipientDomain) {
   if (!headers) {
     return { name:"Email Authentication", icon:"❓", status:"info", badge:"UNAVAILABLE",
       desc:"Authentication headers not available for this email.", weight:0 };
@@ -2498,25 +2540,41 @@ function checkEmailAuthentication(headers, senderDomain, recipientDomain) {
   const internal = isInternalMail(headers, senderDomain, recipientDomain);
   const issues = [];
   let weight = 0;
+  let spfForgivenReason = null;
 
-  if (auth.spf === "fail")     { issues.push("SPF failed — sending server not authorized for this domain"); weight += 30; }
-  else if (auth.spf === "softfail") {
-    // A softfail alone often just means the mail was relayed through an
-    // intermediate hop not listed in the sender's SPF record — a spam-filtering
-    // appliance, forwarder, or mailing list — before reaching Microsoft 365.
-    // Compauth is Microsoft's own composite judgment that already factors in
-    // DKIM/DMARC alignment and accounts for exactly this scenario, so a pass
-    // there is trusted on its own. The Received-chain relay match (SpamTitan,
-    // Barracuda, etc.) is NOT trusted on its own, though — the "from X" hostname
-    // in a Received header is just whatever the connecting server claimed via
-    // SMTP HELO/EHLO, which a malicious sender's own mail server could forge
-    // just as easily as a real relay would state it. It only counts alongside
-    // DKIM+DMARC passing, since those are cryptographically verified and can't
-    // be faked by simply claiming a hostname.
-    const relayCorroborated = knownRelay && auth.dkim === "pass" && auth.dmarc === "pass";
-    if (auth.compauth !== "pass" && !relayCorroborated) {
-      issues.push("SPF soft-failed — server is questionable for this domain");
-      weight += 15;
+  if (auth.spf === "fail" || auth.spf === "softfail") {
+    const hardFail = auth.spf === "fail";
+    const cryptoCorroborated = auth.dkim === "pass" || auth.dmarc === "pass";
+
+    // Tier 1: Microsoft's own composite judgment already accounts for this.
+    if (auth.compauth === "pass") {
+      // fully forgiven, no issue pushed
+    }
+    // Tier 2: known relay hostname is only trustworthy alongside crypto proof
+    // (the hostname alone is just an unverified SMTP HELO/EHLO claim).
+    else if (knownRelay && auth.dkim === "pass" && auth.dmarc === "pass") {
+      // fully forgiven, no issue pushed
+    }
+    else {
+      // Tier 3: does the domain's OWN published SPF record authorize M365?
+      const domainAuthorizesM365 = await fetchSpfAuthorizesM365(senderDomain);
+      if (domainAuthorizesM365 && cryptoCorroborated) {
+        // Full forgiveness — the domain explicitly trusts M365 AND we have
+        // independent cryptographic proof (DKIM or DMARC) this message is
+        // really from their infrastructure. The failure is routing noise.
+        spfForgivenReason = "own SPF record authorizes Microsoft 365, confirmed via DKIM/DMARC";
+      } else if (domainAuthorizesM365 && !cryptoCorroborated) {
+        // Partial credit only — the domain's SPF record WOULD be consistent
+        // with legitimate M365 mail, but we have zero cryptographic proof
+        // this specific message is really from their infrastructure rather
+        // than spoofed. Don't fully clear it — just don't treat it as harshly
+        // as a domain with no relationship to M365 at all.
+        issues.push(`SPF ${hardFail ? "failed" : "soft-failed"} — ${senderDomain}'s SPF record does authorize Microsoft 365, but no DKIM/DMARC corroboration exists for this message. Worth verifying manually.`);
+        weight += hardFail ? 15 : 8;
+      } else {
+        issues.push(`SPF ${hardFail ? "failed" : "soft-failed"} — sending server not authorized for this domain`);
+        weight += hardFail ? 30 : 15;
+      }
     }
   }
 
@@ -2537,11 +2595,13 @@ function checkEmailAuthentication(headers, senderDomain, recipientDomain) {
   if (issues.length === 0) {
     const passed = [];
     if (auth.spf === "pass")      passed.push("SPF ✓");
-    else if (auth.spf === "softfail") {
-      const why = auth.compauth === "pass"
-        ? "CompAuth confirmed legitimate"
-        : `routed through ${knownRelay}, confirmed via DKIM+DMARC`;
-      passed.push(`SPF softfail (forgiven — ${why})`);
+    else if (auth.spf === "softfail" || auth.spf === "fail") {
+      const why = spfForgivenReason
+        ? spfForgivenReason
+        : auth.compauth === "pass"
+          ? "CompAuth confirmed legitimate"
+          : `routed through ${knownRelay}, confirmed via DKIM+DMARC`;
+      passed.push(`SPF ${auth.spf} (forgiven — ${why})`);
     }
     if (auth.dkim === "pass")     passed.push("DKIM ✓");
     else if (auth.dkim === "none" && internal) passed.push("DKIM not required (internal mail)");
