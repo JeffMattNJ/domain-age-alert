@@ -1701,8 +1701,45 @@ const LINK_REWRAPPERS = [
 
 const URL_SHORTENERS = [
   "bit.ly","tinyurl.com","t.co","goo.gl","ow.ly","is.gd","buff.ly",
-  "rebrand.ly","cutt.ly","shorturl.at","rb.gy","tiny.cc","bl.ink"
+  "rebrand.ly","cutt.ly","shorturl.at","rb.gy","tiny.cc","bl.ink",
+  "shortlink.es","l.shortlink.es","v.gd","tr.im","cli.gs","po.st",
+  "x.co","soo.gd","s.id","lnkd.in","clicky.me","qr.net","url.ie",
+  "urlzs.com","v.ht","1url.com","hyperurl.co","shrtco.de","rlu.ru",
+  "gg.gg","tny.im","kutt.it","chilp.it","moourl.com","dub.sh",
+  "spoo.me","zws.im","shrunken.com","adf.ly","tinyurl.at","short.io",
+  "t2m.io","bitly.com","lc.chat","shorturl.com","tiny.pl","yourls.org"
 ];
+
+// A URL shortener is defined more by SHAPE than by any specific domain name —
+// a short hostname paired with an opaque, dictionary-free path segment (the
+// whole point of a shortener is compressing a long URL into exactly that).
+// This catches shorteners never seen before without needing an ever-growing
+// list. Deliberately narrow to avoid flagging ordinary tracking links: this
+// only fires when the PATH itself (not the query string, where legitimate ESP
+// tracking IDs live) is dominated by one long opaque token with no real words
+// and no file extension — e.g. "/l/789868627fc669613bbdec90e1021801f5297965"
+// or "/3xK9zQp", not "/products/blue-widget" or "/nt.jsp".
+function looksLikeShortenerShape(hostname, pathOnly) {
+  const registrableLabel = hostname.split(".").slice(-2)[0] || "";
+  const shortHost = registrableLabel.length <= 10;
+  if (!shortHost) return false;
+
+  const segments = pathOnly.split("/").filter(Boolean);
+  if (segments.length === 0 || segments.length > 2) return false;
+
+  const lastSegment = segments[segments.length - 1];
+  // Real words/paths have letters broken up by hyphens/underscores/dots or
+  // are short and readable. A shortener slug is one unbroken opaque token —
+  // either a long hex-ish string, or a short high-entropy mixed-case code.
+  const isOpaqueToken =
+    /^[a-f0-9]{16,}$/i.test(lastSegment) ||                    // long hex/tracking-style token
+    (/^[a-zA-Z0-9]{5,12}$/.test(lastSegment) && /[a-z]/.test(lastSegment) && /[A-Z0-9]/.test(lastSegment)); // short mixed-case bit.ly-style slug
+  if (!isOpaqueToken) return false;
+
+  // A single short leading segment like "/l/" or "/s/" strengthens this, but
+  // isn't required — some shorteners put the token right at the root.
+  return true;
+}
 
 // Credential/urgency words commonly stuffed into a domain alongside a brand
 // name — "microsoft-verify-login.com" isn't a typo of microsoft.com, it's a
@@ -1780,6 +1817,16 @@ function checkBodyUrls(bodyText, senderDomain) {
     checkedCount++;
 
     if (URL_SHORTENERS.includes(destHost)) {
+      shortened.push(destHost);
+      continue;
+    }
+
+    // Not on the explicit list — check if it still has the SHAPE of a
+    // shortener (short host + opaque dictionary-free path). Catches services
+    // we've never seen before without needing to maintain an exhaustive list.
+    const pathMatch = destUrl.match(/^https?:\/\/[^\/]+(\/[^?#]*)/i);
+    const pathOnly = pathMatch ? pathMatch[1] : "/";
+    if (looksLikeShortenerShape(destHost, pathOnly)) {
       shortened.push(destHost);
       continue;
     }
@@ -2084,10 +2131,15 @@ function checkBECLanguage(subject, bodyText) {
 
   // BEC-specific language patterns (different from generic phishing keywords)
   const becPatterns = [
-    // Urgency + vagueness
+    // Urgency + vagueness — deliberately excludes generic business urgency
+    // words like "asap"/"as soon as possible"/"prompt response"/"time
+    // sensitive". Those are ubiquitous in ordinary business English (a
+    // service manager saying "we'll reach out asap" is completely normal)
+    // and must not trigger on their own, same principle already applied to
+    // "immediately" elsewhere. Only the more distinctly BEC-flavored,
+    // less-common phrasings below count here.
     "urgent inquiry","urgent requirement","urgent request","urgent matter",
     "kindly advise","kindly confirm","kindly revert","at your earliest convenience",
-    "prompt response","as soon as possible","asap","time sensitive",
     // Wire transfer / financial BEC
     "wire transfer","bank transfer","change of account","new bank details",
     "updated banking","payment details have changed","new account number",
@@ -2967,21 +3019,26 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
     senderDomain.endsWith(".microsoft.com") ||
     senderDomain.endsWith(".sharepoint.com");
 
-  // SharePoint phishing patterns
+  // SharePoint phishing patterns — deliberately NOT matching the bare word
+  // "sharepoint" alone. An MSP's staff will constantly mention SharePoint,
+  // OneDrive, Teams, etc. by name in ordinary IT support conversations (this
+  // is literally the job) — only the specific action-oriented phrasing below
+  // ("shared via...", "view in...") is actually characteristic of a real
+  // share-notification phishing attempt, not just a product name in prose.
   const sharepointPatterns = [
-    "sharepoint","shared via sharepoint","view in sharepoint",
-    "sharepoint online","open in sharepoint"
+    "shared via sharepoint","view in sharepoint",
+    "sharepoint online notification","open in sharepoint","sharepoint document has been shared"
   ];
   const oneDrivePatterns = [
-    "onedrive","view in onedrive","shared via onedrive",
-    "onedrive for business","open with onedrive"
+    "view in onedrive","shared via onedrive",
+    "open with onedrive","onedrive file has been shared"
   ];
   const googleDrivePatterns = [
-    "google drive","view in google drive","shared via google drive",
+    "view in google drive","shared via google drive",
     "drive.google.com","open with google docs"
   ];
   const dropboxPatterns = [
-    "dropbox","view in dropbox","shared via dropbox","dropbox link"
+    "view in dropbox","shared via dropbox","dropbox link","dropbox file has been shared"
   ];
   const genericCloudPatterns = [
     "click to view document","click here to view","view document online",
