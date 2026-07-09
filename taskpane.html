@@ -1146,6 +1146,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkCloudStoragePhishing(subject, bodyText, senderDomain)),
     Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
     Promise.resolve(checkBodyUrls(bodyText, senderDomain)),
+    Promise.resolve(checkEmailType(bodyText, internetHeaders)),
     ]);
 
     setSafetyStatus("");
@@ -2695,6 +2696,35 @@ async function checkEmailAuthentication(headers, senderDomain, recipientDomain) 
 }
 
 // ── CHECK: Microsoft SCL / BCL spam signals ───────────────────────────────────
+// ── Email Type (informational only — NEVER affects score) ──────────────────
+// This is a category label, not a security verdict. weight is always 0 and
+// status is always either "info" (marketing detected) or "pass" (standard
+// mail, folds into the collapsed passed-checks list like everything else).
+// Every other check still runs at full strength regardless of what this says
+// — a "looks like marketing" label must never become a shortcut past actual
+// scrutiny, since a footer, an unsubscribe link, and a copyright line are all
+// just text anyone can fake. This exists purely so a legitimate vendor email
+// doesn't feel like it's being read through the wrong lens.
+function checkEmailType(bodyText, headers) {
+  const hasListUnsubscribeHeader = /^List-Unsubscribe:/im.test(headers || "");
+  const bodyLower = (bodyText || "").toLowerCase();
+  const hasUnsubscribeLanguage = /unsubscribe|no longer wish to receive|manage your (email )?preferences/i.test(bodyLower);
+  const hasLegalFooter = /©\s?\d{4}|copyright\s?\d{4}|all rights reserved|privacy policy|terms of (use|service)/i.test(bodyLower);
+
+  const looksLikeMarketing = hasListUnsubscribeHeader || (hasUnsubscribeLanguage && hasLegalFooter);
+
+  if (!looksLikeMarketing) {
+    return { name:"Email Type", icon:"✅", status:"pass", badge:"STANDARD",
+      desc:"No bulk-mail indicators detected — appears to be standard correspondence.", weight:0 };
+  }
+
+  return {
+    name:"Email Type", icon:"📢", status:"info", badge:"MARKETING/VENDOR",
+    desc:"This looks like a marketing or vendor communication (unsubscribe link and/or bulk-mail footer detected). Informational only — every security check above still ran at full strength; this label does not reduce scrutiny.",
+    weight:0
+  };
+}
+
 function checkMicrosoftSpamSignals(headers) {
   if (!headers) return { name:"Spam Signals (M365)", icon:"✅", status:"pass", badge:"N/A", desc:"Microsoft spam headers not available.", weight:0 };
   let weight = 0; const flags = [];
@@ -3303,6 +3333,7 @@ const CHECK_GLOSSARY = {
   "Hosted Platform": "Flags domains built on free website-builder platforms, which legitimate businesses rarely use to send official email.",
   "Subject URLs": "Checks for links placed directly in the subject line — an unusual and risky spot for a legitimate sender to put one.",
   "URL Body Check": "Checks every link in the message body — unwraps Safe Links/Proofpoint/Mimecast-style rewrapped links to see the real destination, and looks for typosquats, look-alike characters, number substitutions, brand names hidden in subdomains, and shorteners that hide where a link actually goes.",
+  "Email Type": "A category label, not a security check — flags whether this looks like a marketing/vendor bulk email (unsubscribe link, copyright footer) versus standard correspondence. Purely informational: it never changes the safety score or skips any check.",
   "Display Name Check": "Compares the sender's display name against their actual domain to catch company names or job titles that don't line up with who's really sending it.",
   "Body Contact Check": "Compares phone numbers or emails listed in the message body against the sender's real domain to catch mismatched contact info.",
   "BEC Language Check": "Scans the wording for phrases common in Business Email Compromise scams — urgency, secrecy, 'kindly advise', wire-transfer language, etc.",
