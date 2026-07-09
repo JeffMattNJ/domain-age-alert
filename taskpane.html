@@ -349,6 +349,10 @@
     #alert-line.safe     { background: rgba(34,197,94,0.1);   border: 1px solid var(--safe);     color: #4ade80; }
     .alert-prefix { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.8; display: block; margin-bottom: 2px; }
     .alert-reason { display: block; }
+    #alert-context {
+      font-size: 11px; color: var(--muted); margin-top: -6px; margin-bottom: 10px;
+      padding-left: 2px; line-height: 1.4;
+    }
 
     /* ── Safety checks section ── */
     #safety-section { display: none; margin-top: 14px; }
@@ -478,6 +482,7 @@
       <span class="alert-prefix" id="alert-prefix"></span>
       <span class="alert-reason" id="alert-reason"></span>
     </div>
+    <div id="alert-context" style="display:none;"></div>
 
     <!-- ⑥ SAFETY LOADING SPINNER -->
     <div id="safety-loading" style="display:none;">
@@ -3278,6 +3283,21 @@ function renderSafetyResults(results) {
   alertLine.style.display = "block";
   document.getElementById("alert-prefix").textContent = prefixText;
   document.getElementById("alert-reason").textContent = reasonText;
+
+  // Second, softer line of context when this is a marketing/vendor email AND
+  // a notice/alert is actually showing — helps the reader understand "this
+  // caution is common for this type of email" without changing the banner
+  // severity, the score, or skipping anything. Never shown on its own, and
+  // never shown for the fully-clear case (nothing to add context to there).
+  const alertContext = document.getElementById("alert-context");
+  const emailTypeResult = results.find(r => r.name === "Email Type");
+  const isMarketing = emailTypeResult && emailTypeResult.badge === "MARKETING/VENDOR";
+  if (isMarketing && bannerClass !== "safe") {
+    alertContext.textContent = "ℹ️ This appears to be a marketing, sales, or vendor email — flags like shortened links or tracking redirects are common in these communications. Still worth a quick look before clicking, just with that context in mind.";
+    alertContext.style.display = "block";
+  } else {
+    alertContext.style.display = "none";
+  }
 
   // Score bar
   document.getElementById("score-num").textContent  = `${safe}/100`;
