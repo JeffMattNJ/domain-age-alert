@@ -2011,11 +2011,29 @@ function checkDisplayNameDomainMismatch(displayName, senderDomain, senderEmail) 
   ]);
   const looksOfficial = officialSoundingWords.some(w => nameLower.includes(w));
   if (looksOfficial && !knownSafeDomains.has(senderDomain)) {
-    return {
-      name:"Display Name Check", icon:"⚠️", status:"warn", badge:"OFFICIAL IMPERSONATION",
-      desc:`Display name "${displayName}" uses official-sounding language but email is from unknown domain "${senderDomain}". Legitimate IT, security, or administrative emails come from known organizational domains.`,
-      weight:25
-    };
+    // Self-consistency check, same principle as Part 1's company-name check:
+    // does the display name actually correspond to this domain? "Duo
+    // Security" -> "duosecurity.com" is a literal match — the whole business
+    // of a security/IT vendor is having an official-sounding name, so a tiny
+    // hardcoded allowlist will never keep up (Okta, CrowdStrike, KnowBe4,
+    // Proofpoint, every MFA/security vendor hits this same wall). Require a
+    // substantial match, not any single generic word, so "Security Alert"
+    // from an unrelated domain that happens to contain "alert" still gets
+    // caught — only an actual concatenation match clears this.
+    const nameWordsForDomain = nameLower.split(/[\s,.-]+/).filter(w => w.length > 1 && !stopWords.has(w));
+    const nameJoined = nameWordsForDomain.join("");
+    const domainSelfConsistent = nameJoined.length >= 6 &&
+      (domainBase.includes(nameJoined) || nameJoined.includes(domainBase));
+
+    if (!domainSelfConsistent) {
+      return {
+        name:"Display Name Check", icon:"⚠️", status:"warn", badge:"OFFICIAL IMPERSONATION",
+        desc:`Display name "${displayName}" uses official-sounding language but email is from unknown domain "${senderDomain}". Legitimate IT, security, or administrative emails come from known organizational domains.`,
+        weight:25
+      };
+    }
+    return { name:"Display Name Check", icon:"✅", status:"pass", badge:"OK",
+      desc:`"${displayName}" is consistent with sender domain "${senderDomain}".`, weight:0 };
   }
 
   // Extract first and last name parts from display name
