@@ -1854,7 +1854,19 @@ function checkBodyUrls(bodyText, senderDomain) {
     // perfectly normal "visit our website" link from a consonant-heavy but
     // legitimate company (mscnj.com, tdsynnex.com, etc.) gets flagged as
     // impersonating itself, which is exactly backwards.
-    const isSameAsSender = senderBaseDomain && baseDomain === senderBaseDomain;
+    //
+    // Also check after stripping characters that are never valid in a real
+    // DNS hostname (e.g. a literal "?") — old quoted signature blocks deep in
+    // a thread sometimes carry mangled encoding artifacts (a non-breaking
+    // space or similar that didn't survive being forwarded/quoted repeatedly
+    // renders as "www.?mkpclaw.?com" instead of "www.mkpclaw.com"). This is
+    // deliberately narrow and safe: it only clears the domain if the CLEANED
+    // version matches the sender's own domain — which we already independently
+    // know from the From: header — so it can only ever reveal a domain we
+    // already trust, never launder an unrelated or attacker-controlled one.
+    const cleanedBaseDomain = baseDomain.replace(/[^a-z0-9.-]/gi, "");
+    const isSameAsSender = senderBaseDomain &&
+      (baseDomain === senderBaseDomain || cleanedBaseDomain === senderBaseDomain);
     if (isSameAsSender) continue;
 
     // Brand-in-subdomain / brand+credential-word tricks — these specifically
