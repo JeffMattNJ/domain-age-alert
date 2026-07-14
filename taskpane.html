@@ -1737,6 +1737,17 @@ const PLATFORM_LOCKED_SHORTENERS = [
   "youtu.be","fb.me","amzn.to"
 ];
 
+// Major platforms whose profile/content URLs commonly have short,
+// mixed-case handle-style paths (e.g. twitter.com/TriStateCS) that would
+// otherwise trip the shape heuristic below — a readable company/brand handle
+// isn't remotely the same thing as an actual random shortener slug, even
+// though both can be short and mixed-case. These are real platforms, not
+// shorteners, so they're excluded from the shape check entirely.
+const KNOWN_MAJOR_PLATFORMS = [
+  "twitter.com","x.com","facebook.com","instagram.com","linkedin.com",
+  "youtube.com","tiktok.com","github.com","pinterest.com","reddit.com","threads.net"
+];
+
 // A URL shortener is defined more by SHAPE than by any specific domain name —
 // a short hostname paired with an opaque, dictionary-free path segment (the
 // whole point of a shortener is compressing a long URL into exactly that).
@@ -1747,6 +1758,8 @@ const PLATFORM_LOCKED_SHORTENERS = [
 // and no file extension — e.g. "/l/789868627fc669613bbdec90e1021801f5297965"
 // or "/3xK9zQp", not "/products/blue-widget" or "/nt.jsp".
 function looksLikeShortenerShape(hostname, pathOnly) {
+  if (KNOWN_MAJOR_PLATFORMS.includes(hostname)) return false;
+
   const registrableLabel = hostname.split(".").slice(-2)[0] || "";
   const shortHost = registrableLabel.length <= 10;
   if (!shortHost) return false;
@@ -2119,7 +2132,21 @@ function checkDisplayNameDomainMismatch(displayName, senderDomain, senderEmail) 
     )
   );
 
-  if (!nameMatchesUsername && nameParts.length >= 2) {
+  // Initials pattern — "DL" for "Dan Linkletter" is an extremely common,
+  // completely normal corporate email convention (first-initial+last-initial,
+  // or one full name + the other's initial) that the substring/prefix checks
+  // above don't cover, since "dl" is too short to match any single name part.
+  let matchesInitials = false;
+  if (nameParts.length >= 2) {
+    const initials = nameParts.map(p => p[0]).join("");                              // "dan","linkletter" -> "dl"
+    const firstPlusLastInitial = nameParts[0] + nameParts[nameParts.length-1][0];      // "danl"
+    const firstInitialPlusLast = nameParts[0][0] + nameParts[nameParts.length-1];      // "dlinkletter"
+    matchesInitials = usernameClean === initials ||
+      usernameClean === firstPlusLastInitial ||
+      usernameClean === firstInitialPlusLast;
+  }
+
+  if (!nameMatchesUsername && !matchesInitials && nameParts.length >= 2) {
     // Username and display name share nothing — flag it
     const freeProviders = new Set(["gmail.com","yahoo.com","hotmail.com","aol.com",
       "icloud.com","protonmail.com","mail.com","yandex.com","gmx.com"]);
@@ -2423,7 +2450,23 @@ function checkFinancialRequest(subject, bodyText) {
     "gift card","itunes card","google play card","amazon card","buy cards",
   ];
 
-  const found = financialPatterns.filter(p => combined.includes(p));
+  const found0 = financialPatterns.filter(p => combined.includes(p));
+
+  // "account number" and "routing number" are too generic to trust without
+  // context on their own — they show up constantly in completely benign
+  // telecom porting paperwork (BTN, LOA, carrier account numbers) with no
+  // relation to wire fraud at all. Only strip those two specific matches when
+  // there's clear telecom-porting context AND no other, genuinely unambiguous
+  // financial phrase (wire transfer, bank account, direct deposit, etc.) is
+  // also present — a real attack combining both would still get caught.
+  const AMBIGUOUS_FINANCIAL_PATTERNS = new Set(["account number", "routing number"]);
+  const TELECOM_CONTEXT_WORDS = ["porting","port out","losing carrier","gaining carrier",
+    "btn","loa","resporg","telephone number","phone number","carrier account","did:"];
+  const hasTelecomContext = TELECOM_CONTEXT_WORDS.some(w => combined.includes(w));
+  const hasUnambiguousFinancial = found0.some(p => !AMBIGUOUS_FINANCIAL_PATTERNS.has(p));
+  const found = (hasTelecomContext && !hasUnambiguousFinancial)
+    ? found0.filter(p => !AMBIGUOUS_FINANCIAL_PATTERNS.has(p))
+    : found0;
 
   if (found.length === 0) {
     return { name:"Financial Request", icon:"✅", status:"pass", badge:"NONE DETECTED",
