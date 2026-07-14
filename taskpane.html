@@ -1933,15 +1933,19 @@ function checkBodyUrls(bodyText, senderDomain) {
     } else if (lookalikeResult.status === "warn") {
       lowConfidence.push(`${destHost} — ${lookalikeResult.desc}`);
     } else {
-      // Low-weight, informational only — HTTPS/encoding alone don't make a
-      // link safe or unsafe, so these never escalate past a soft advisory.
-      // (Same-domain links already skipped entirely above, before reaching
-      // this point.) Known rewrappers/ESP tracking links are excluded from
-      // the encoding check since long, heavily-encoded URLs are completely
-      // routine for those (we already unwrap the ones we recognize above).
-      if (/^http:\/\//i.test(destUrl)) {
-        advisories.push(`${destHost} uses unencrypted http:// rather than https://`);
-      } else if (!unwrapped && destUrl.length > 200 && (destUrl.match(/[%=&]/g) || []).length > 8) {
+      // Low-weight, informational only — encoding alone doesn't make a link
+      // safe or unsafe. (Same-domain links already skipped entirely above,
+      // before reaching this point.) Known rewrappers/ESP tracking links are
+      // excluded since long, heavily-encoded URLs are completely routine for
+      // those (we already unwrap the ones we recognize above).
+      //
+      // Deliberately NOT flagging bare http:// vs https:// here — modern
+      // phishing overwhelmingly uses HTTPS too (free certificates are trivial
+      // to obtain), so this stopped being a meaningful signal years ago, and
+      // in practice a legitimate sender writing a domain in prose ("the link
+      // is X") never types out the scheme anyway. It was pure noise that
+      // didn't correspond to anything a reader could actually act on.
+      if (!unwrapped && destUrl.length > 200 && (destUrl.match(/[%=&]/g) || []).length > 8) {
         advisories.push(`${destHost} link is very long and heavily encoded — worth a closer look before clicking`);
       }
     }
@@ -2285,11 +2289,21 @@ function checkCCHijack(senderDomain, ccList, bodyText, recipientDomain) {
     .map(r => (r.emailAddress || "").toLowerCase().split("@")[1])
     .filter(Boolean);
 
+  // Extract every historical "To:"/"Cc:" header line from quoted thread
+  // history (the "From: X / Sent: Y / To: Z / Cc: W" blocks Outlook includes
+  // when quoting prior messages). An address that's been CC'd throughout the
+  // thread's own history is exactly what a genuine long-running conversation
+  // looks like — that's evidence of legitimacy, not suspicion. The real
+  // injection pattern is the opposite: an address that's NEVER appeared in
+  // any prior quoted Cc:/To: line suddenly showing up now.
+  const threadHeaderLines = (bodyText.match(/^(?:To|Cc):.*$/gim) || []).join(" ").toLowerCase();
+
   // Check each CC recipient
   for (const cc of ccList) {
     const ccEmail  = (cc.emailAddress || "").toLowerCase();
     const ccDomain = ccEmail.split("@")[1] || "";
     const ccName   = (cc.displayName || "").toLowerCase();
+    const appearsInThreadHistory = threadHeaderLines.includes(ccEmail);
 
     // Flag 1: Free provider in CC of what appears to be a corporate thread
     // Skip if it's the recipient's own domain
@@ -2325,15 +2339,16 @@ function checkCCHijack(senderDomain, ccList, bodyText, recipientDomain) {
       }
     }
 
-    // Flag 3: Check if this CC address also appears in the body with contact instructions
-    // (someone inserted their address AND put it in the body as a contact)
-    if (bodyText) {
+    // Flag 3: this CC address is being introduced as a "contact" in the body,
+    // but has NEVER appeared in the thread's own quoted history — skip
+    // entirely for anyone already established as a long-standing participant.
+    if (bodyText && !appearsInThreadHistory) {
       const bodyLower = bodyText.toLowerCase();
       const ccEmailInBody = bodyLower.includes(ccEmail);
       const contactContext = ['contact me','reach me','reply to','email me',
         'contact details','send to'].some(t => bodyLower.includes(t));
       if (ccEmailInBody && contactContext && ccDomain !== senderDomain) {
-        flags.push(`"${ccEmail}" — CC'd AND listed as a contact in the body. Possible thread injection.`);
+        flags.push(`"${ccEmail}" — CC'd AND listed as a contact in the body, with no prior appearance in this thread's history. Possible thread injection.`);
       }
     }
   }
