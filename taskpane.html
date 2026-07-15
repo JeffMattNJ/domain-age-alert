@@ -2721,6 +2721,7 @@ const KNOWN_MAIL_PLATFORM_SPF_PATTERNS = [
   /include:[a-z0-9-]*\.ppe-hosted\.com/i,     // Proofpoint (Essentials)
   /include:[a-z0-9._-]*mimecast\.com/i,       // Mimecast
   /include:[a-z0-9._-]*barracudanetworks\.com/i, // Barracuda Email Security
+  /include:spf\.serverdata\.net/i,            // Intermedia (hosted Exchange)
 ];
 
 const SPF_CACHE_PREFIX = "spf_rec_";
@@ -2767,6 +2768,19 @@ async function checkEmailAuthentication(headers, senderDomain, recipientDomain) 
   let weight = 0;
   let spfForgivenReason = null;
 
+  // Computed lazily, at most once, shared between the SPF and DMARC checks
+  // below — both can need the same lookup, and this avoids doing it twice
+  // (or at all, for the common case where SPF already passes cleanly).
+  let _knownPlatformResult = null;
+  let _knownPlatformChecked = false;
+  async function domainAuthorizesKnownPlatform() {
+    if (!_knownPlatformChecked) {
+      _knownPlatformResult = await fetchSpfAuthorizesKnownPlatform(senderDomain);
+      _knownPlatformChecked = true;
+    }
+    return _knownPlatformResult;
+  }
+
   if (auth.spf === "fail" || auth.spf === "softfail") {
     const hardFail = auth.spf === "fail";
     const cryptoCorroborated = auth.dkim === "pass" || auth.dmarc === "pass";
@@ -2783,14 +2797,14 @@ async function checkEmailAuthentication(headers, senderDomain, recipientDomain) 
     else {
       // Tier 3: does the domain's OWN published SPF record authorize a known,
       // legitimate major mail platform (M365, Google Workspace, Proofpoint,
-      // Mimecast, Barracuda)?
-      const domainAuthorizesKnownPlatform = await fetchSpfAuthorizesKnownPlatform(senderDomain);
-      if (domainAuthorizesKnownPlatform && cryptoCorroborated) {
+      // Mimecast, Barracuda, Intermedia)?
+      const knownPlatform = await domainAuthorizesKnownPlatform();
+      if (knownPlatform && cryptoCorroborated) {
         // Full forgiveness — the domain explicitly trusts a known platform AND
         // we have independent cryptographic proof (DKIM or DMARC) this message
         // is really from their infrastructure. The failure is routing noise.
         spfForgivenReason = "own SPF record authorizes a known mail platform, confirmed via DKIM/DMARC";
-      } else if (domainAuthorizesKnownPlatform && !cryptoCorroborated) {
+      } else if (knownPlatform && !cryptoCorroborated) {
         // Partial credit only — the domain's SPF record WOULD be consistent
         // with legitimate mail via that platform, but we have zero
         // cryptographic proof this specific message is really from their
@@ -2808,7 +2822,27 @@ async function checkEmailAuthentication(headers, senderDomain, recipientDomain) 
   if (auth.dkim === "fail")    { issues.push("DKIM failed — message may have been tampered with in transit"); weight += 25; }
   else if (auth.dkim === "none" && !internal) { issues.push("DKIM not signed — no cryptographic verification of sender"); weight += 8; }
 
-  if (auth.dmarc === "fail")   { issues.push("DMARC failed — sender domain does not align with authentication. Strong spoofing indicator"); weight += 35; }
+  if (auth.dmarc === "fail") {
+    // DMARC alignment depends on SPF or DKIM succeeding. If SPF is ALSO
+    // showing the same relay-hop pattern (softfail/fail, not none — meaning
+    // the domain does try to authenticate, our relay is just breaking it)
+    // AND the domain's own SPF record authorizes a known platform AND DKIM
+    // isn't an outright verification failure (just absent is fine — a
+    // failure would mean something more concerning happened), this DMARC
+    // fail is best explained by the same structural routing issue, not
+    // confirmed spoofing. Still not fully cleared — there's genuinely no
+    // DKIM to fall back on for real cryptographic proof — just not treated
+    // as harshly as an unexplained DMARC failure with no other context.
+    const spfShowsRelayPattern = auth.spf === "softfail" || auth.spf === "fail";
+    const knownPlatform = await domainAuthorizesKnownPlatform();
+    if (spfShowsRelayPattern && knownPlatform && auth.dkim !== "fail") {
+      issues.push(`DMARC failed — likely a consequence of the same mail-relay routing affecting SPF above, since ${senderDomain}'s SPF record does authorize a known platform. This sender's mail isn't DKIM-signed though, so full verification isn't possible — worth a quick check.`);
+      weight += 15;
+    } else {
+      issues.push("DMARC failed — sender domain does not align with authentication. Strong spoofing indicator");
+      weight += 35;
+    }
+  }
   else if (auth.dmarc === "none" && !internal) { issues.push("DMARC policy not set — domain has no spoofing protection configured"); weight += 5; }
 
   if (auth.compauth === "fail") { issues.push(`Microsoft composite authentication failed (reason ${auth.reason})`); weight += 30; }
