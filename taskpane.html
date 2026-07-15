@@ -2701,25 +2701,37 @@ function isInternalMail(headers, senderDomain, recipientDomain) {
   return !!match && match[1].toUpperCase() === "INT";
 }
 
-// ── Helper: does the sender domain's OWN SPF record authorize Microsoft 365? ──
+// ── Helper: does the sender domain's OWN SPF record authorize a known,
+// legitimate major mail platform? ──────────────────────────────────────────
 // The softfail/fail verdict Microsoft reports is based on the CONNECTING IP at
 // the final hop — which, once mail passes through mattnj's own TitanHQ relay,
 // is TitanHQ's IP, not the sender's real infrastructure. That produces a false
-// failure regardless of how correctly the sender's domain is configured. Rather
-// than inferring this indirectly (compauth, relay-name matching), this checks
-// the domain's actual published SPF record directly: if the domain owner has
-// explicitly authorized spf.protection.outlook.com, they've told us Microsoft
-// 365 is legitimate sending infrastructure for their mail — a failure that
-// happens at OUR relay hop, after that point, isn't evidence of spoofing.
+// failure regardless of how correctly the sender's domain is configured, and
+// regardless of WHICH legitimate platform the sender actually uses — this
+// isn't specific to Microsoft 365. Checking a curated list of major
+// enterprise mail/security platforms' known SPF include patterns instead of
+// just spf.protection.outlook.com: if the domain owner has authorized any of
+// these, a failure that happens at OUR relay hop, after that point, isn't
+// evidence of spoofing. Same single DNS lookup, same cache, same cost —
+// generalizing the check doesn't add any new network calls.
+const KNOWN_MAIL_PLATFORM_SPF_PATTERNS = [
+  /include:spf\.protection\.outlook\.com/i,   // Microsoft 365
+  /include:_spf\.google\.com/i,               // Google Workspace
+  /include:[a-z0-9-]*\.pphosted\.com/i,       // Proofpoint (hosted)
+  /include:[a-z0-9-]*\.ppe-hosted\.com/i,     // Proofpoint (Essentials)
+  /include:[a-z0-9._-]*mimecast\.com/i,       // Mimecast
+  /include:[a-z0-9._-]*barracudanetworks\.com/i, // Barracuda Email Security
+];
+
 const SPF_CACHE_PREFIX = "spf_rec_";
 const SPF_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h, same as RDAP
 
-async function fetchSpfAuthorizesM365(domain) {
+async function fetchSpfAuthorizesKnownPlatform(domain) {
   if (!domain) return false;
   try {
     const cached = getCache(SPF_CACHE_PREFIX + domain);
     if (cached && (Date.now() - cached.ts) < SPF_CACHE_TTL_MS) {
-      return !!cached.includesM365;
+      return !!cached.authorizesKnownPlatform;
     }
   } catch (_) {}
 
@@ -2733,10 +2745,11 @@ async function fetchSpfAuthorizesM365(domain) {
     const data = await res.json();
     const txtRecords = (data.Answer || []).map(a => (a.data || "").replace(/^"|"$/g, ""));
     const spfRecord = txtRecords.find(t => t.startsWith("v=spf1"));
-    const includesM365 = !!spfRecord && /include:spf\.protection\.outlook\.com/i.test(spfRecord);
+    const authorizesKnownPlatform = !!spfRecord &&
+      KNOWN_MAIL_PLATFORM_SPF_PATTERNS.some(re => re.test(spfRecord));
 
-    try { setCache(SPF_CACHE_PREFIX + domain, { includesM365, ts: Date.now() }); } catch (_) {}
-    return includesM365;
+    try { setCache(SPF_CACHE_PREFIX + domain, { authorizesKnownPlatform, ts: Date.now() }); } catch (_) {}
+    return authorizesKnownPlatform;
   } catch (_) {
     return false; // silent fail-open — never penalize or crash on a lookup error
   }
@@ -2768,20 +2781,22 @@ async function checkEmailAuthentication(headers, senderDomain, recipientDomain) 
       // fully forgiven, no issue pushed
     }
     else {
-      // Tier 3: does the domain's OWN published SPF record authorize M365?
-      const domainAuthorizesM365 = await fetchSpfAuthorizesM365(senderDomain);
-      if (domainAuthorizesM365 && cryptoCorroborated) {
-        // Full forgiveness — the domain explicitly trusts M365 AND we have
-        // independent cryptographic proof (DKIM or DMARC) this message is
-        // really from their infrastructure. The failure is routing noise.
-        spfForgivenReason = "own SPF record authorizes Microsoft 365, confirmed via DKIM/DMARC";
-      } else if (domainAuthorizesM365 && !cryptoCorroborated) {
+      // Tier 3: does the domain's OWN published SPF record authorize a known,
+      // legitimate major mail platform (M365, Google Workspace, Proofpoint,
+      // Mimecast, Barracuda)?
+      const domainAuthorizesKnownPlatform = await fetchSpfAuthorizesKnownPlatform(senderDomain);
+      if (domainAuthorizesKnownPlatform && cryptoCorroborated) {
+        // Full forgiveness — the domain explicitly trusts a known platform AND
+        // we have independent cryptographic proof (DKIM or DMARC) this message
+        // is really from their infrastructure. The failure is routing noise.
+        spfForgivenReason = "own SPF record authorizes a known mail platform, confirmed via DKIM/DMARC";
+      } else if (domainAuthorizesKnownPlatform && !cryptoCorroborated) {
         // Partial credit only — the domain's SPF record WOULD be consistent
-        // with legitimate M365 mail, but we have zero cryptographic proof
-        // this specific message is really from their infrastructure rather
-        // than spoofed. Don't fully clear it — just don't treat it as harshly
-        // as a domain with no relationship to M365 at all.
-        issues.push(`SPF ${hardFail ? "failed" : "soft-failed"} — ${senderDomain}'s SPF record does authorize Microsoft 365, but no DKIM/DMARC corroboration exists for this message. Worth verifying manually.`);
+        // with legitimate mail via that platform, but we have zero
+        // cryptographic proof this specific message is really from their
+        // infrastructure rather than spoofed. Don't fully clear it — just
+        // don't treat it as harshly as a domain with no such relationship.
+        issues.push(`SPF ${hardFail ? "failed" : "soft-failed"} — ${senderDomain}'s SPF record does authorize a known mail platform, but no DKIM/DMARC corroboration exists for this message. Worth verifying manually.`);
         weight += hardFail ? 15 : 8;
       } else {
         issues.push(`SPF ${hardFail ? "failed" : "soft-failed"} — sending server not authorized for this domain`);
