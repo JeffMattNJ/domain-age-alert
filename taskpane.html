@@ -3086,7 +3086,7 @@ function checkCredentialHarvesting(subject, bodyText) {
   const combined  = ((subject||"") + " " + cleanBody).toLowerCase();
   if (combined.length < 10) return { name:"Credential Harvesting", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
 
-  const patterns = [
+  const strongPatterns = [
     // Document review/sign lures
     "review secure document","view secure document","secure document shared",
     "please review and sign","review and approve","sign the document",
@@ -3100,19 +3100,46 @@ function checkCredentialHarvesting(subject, bodyText) {
     "account suspended","your mailbox is full","storage limit reached",
     "unusual sign-in","suspicious sign-in","login from new device",
     "click to verify email","confirm your email address",
-    // IT impersonation
+  ];
+  // IT-role mentions alone are far too mundane to trust on their own —
+  // "IT department" shows up constantly in completely benign correspondence,
+  // especially in mail sent TO an actual IT support provider (exactly the
+  // case that exposed this). These only matter stacked together or alongside
+  // an actual strong, action-oriented phrase above.
+  const weakPatterns = [
     "microsoft account team","it help desk","it department","helpdesk ticket",
     "security team","your admin has","system notification",
   ];
 
-  const found = patterns.filter(p => combined.includes(p));
-  if (found.length === 0) return { name:"Credential Harvesting", icon:"✅", status:"pass", badge:"CLEAR", desc:"No credential harvesting language detected.", weight:0 };
+  const strongFound = strongPatterns.filter(p => combined.includes(p));
+  const weakFound   = weakPatterns.filter(p => combined.includes(p));
+  const found = [...strongFound, ...weakFound];
 
-  const weight = found.length >= 3 ? 35 : found.length >= 2 ? 25 : 15;
+  if (strongFound.length === 0 && weakFound.length < 3) {
+    return { name:"Credential Harvesting", icon:"✅", status:"pass", badge:"CLEAR", desc:"No credential harvesting language detected.", weight:0 };
+  }
+
+  if (strongFound.length >= 2 || (strongFound.length >= 1 && weakFound.length >= 1)) {
+    return {
+      name:"Credential Harvesting", icon:"🚨", status:"fail", badge:"CREDENTIAL RISK",
+      desc:`${found.length} credential harvesting phrase(s) detected: "${found.slice(0,2).join('", "')}". Do not enter login credentials via any link in this email.`,
+      weight: 35
+    };
+  }
+  if (strongFound.length === 1) {
+    return {
+      name:"Credential Harvesting", icon:"🚨", status:"fail", badge:"CREDENTIAL RISK",
+      desc:`Credential harvesting phrase detected: "${strongFound[0]}". Do not enter login credentials via any link in this email.`,
+      weight: 15
+    };
+  }
+  // weakFound.length >= 3, no strong phrase at all — several generic IT-role
+  // mentions stacked together is still worth a soft note, just not treated
+  // as harshly as an actual action-oriented credential lure.
   return {
-    name:"Credential Harvesting", icon:"🚨", status:"fail", badge:"CREDENTIAL RISK",
-    desc:`${found.length} credential harvesting phrase(s) detected: "${found.slice(0,2).join('", "')}". Do not enter login credentials via any link in this email.`,
-    weight
+    name:"Credential Harvesting", icon:"⚠️", status:"warn", badge:"IT-IMPERSONATION LANGUAGE",
+    desc:`Several generic IT-role phrases detected: "${weakFound.slice(0,2).join('", "')}". Likely benign, but worth a glance if this also asks you to log in anywhere.`,
+    weight: 12
   };
 }
 
