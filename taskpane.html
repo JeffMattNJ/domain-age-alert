@@ -1156,6 +1156,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
     Promise.resolve(checkBodyUrls(bodyText, senderDomain)),
     Promise.resolve(checkEmailType(bodyText, internetHeaders)),
+    Promise.resolve(checkSalesPitchTone(bodyText)),
     ]);
 
     setSafetyStatus("");
@@ -2911,6 +2912,52 @@ function checkEmailType(bodyText, headers) {
   };
 }
 
+// ── Sales Pitch Tone (informational only — NEVER affects score) ────────────
+// Same category-label principle as Email Type above, but catching a different
+// pattern: one-to-one cold sales outreach. This won't have an unsubscribe
+// link or bulk-mail footer (Email Type would miss it entirely), but tends to
+// have its own recognizable phrasing — "reached out a few times," "strong
+// fit," "let me know what works best for you" — often paired with a sales-y
+// title in the signature. weight is always 0 on every path; this is a label,
+// not a verdict, exactly like Email Type.
+const SALES_PITCH_PHRASES = [
+  "reached out a few times","reaching out again","introduce myself",
+  "introduce our","strong fit","quick call","worth a conversation",
+  "would love to connect","circling back","touch base",
+  "following up on my previous","if now isn't the right time","book a time",
+  "share how we've helped","keep this brief","best place to begin",
+  "happy to send over","let me know what works best for you",
+  "no response yet","best person to speak with","quick intro"
+];
+const SALES_ROLE_TITLES = [
+  "sales manager","account executive","business development","channel sales",
+  "regional sales","sales representative","sales rep","account manager",
+  "sales director","business development manager"
+];
+
+function checkSalesPitchTone(bodyText) {
+  const bodyLower = (bodyText || "").toLowerCase();
+  const phraseMatches = SALES_PITCH_PHRASES.filter(p => bodyLower.includes(p));
+  const hasRoleTitle = SALES_ROLE_TITLES.some(t => bodyLower.includes(t));
+
+  // Require more than one generic phrase, or one phrase plus a sales-role
+  // title in the signature — a single coincidental phrase alone (e.g. a
+  // genuine client saying "let me know what works best for you") shouldn't
+  // be enough to label something a sales pitch.
+  const soundsLikeSalesPitch = phraseMatches.length >= 2 || (phraseMatches.length >= 1 && hasRoleTitle);
+
+  if (!soundsLikeSalesPitch) {
+    return { name:"Sales Pitch Tone", icon:"✅", status:"pass", badge:"STANDARD",
+      desc:"No cold-outreach/sales-pitch language detected.", weight:0 };
+  }
+
+  return {
+    name:"Sales Pitch Tone", icon:"📣", status:"info", badge:"SALES PITCH",
+    desc:"This reads like a sales pitch or cold outreach (phrasing like \"" + (phraseMatches[0] || "introduce myself") + "\"" + (hasRoleTitle ? " and a sales-role title in the signature" : "") + "). Informational only — this doesn't affect the safety score or skip any check.",
+    weight:0
+  };
+}
+
 function checkMicrosoftSpamSignals(headers) {
   if (!headers) return { name:"Spam Signals (M365)", icon:"✅", status:"pass", badge:"N/A", desc:"Microsoft spam headers not available.", weight:0 };
   let weight = 0; const flags = [];
@@ -3469,16 +3516,23 @@ function renderSafetyResults(results) {
   document.getElementById("alert-prefix").textContent = prefixText;
   document.getElementById("alert-reason").textContent = reasonText;
 
-  // Second, softer line of context when this is a marketing/vendor email AND
-  // a notice/alert is actually showing — helps the reader understand "this
-  // caution is common for this type of email" without changing the banner
-  // severity, the score, or skipping anything. Never shown on its own, and
-  // never shown for the fully-clear case (nothing to add context to there).
+  // Second, softer line of context — two distinct scenarios:
+  // 1) Marketing/vendor email AND a notice/alert is showing — helps the
+  //    reader understand "this caution is common for this type of email."
+  // 2) Fully CLEAR result, but the content reads like a cold sales pitch —
+  //    a plain FYI note alongside the CLEAR banner, not a caution. Neither
+  //    case changes the banner severity, the score, or skips anything.
   const alertContext = document.getElementById("alert-context");
   const emailTypeResult = results.find(r => r.name === "Email Type");
-  const isMarketing = emailTypeResult && emailTypeResult.badge === "MARKETING/VENDOR";
+  const salesPitchResult = results.find(r => r.name === "Sales Pitch Tone");
+  const isMarketing  = emailTypeResult  && emailTypeResult.badge  === "MARKETING/VENDOR";
+  const isSalesPitch = salesPitchResult && salesPitchResult.badge === "SALES PITCH";
+
   if (isMarketing && bannerClass !== "safe") {
     alertContext.textContent = "ℹ️ This appears to be a marketing, sales, or vendor email — flags like shortened links or tracking redirects are common in these communications. Still worth a quick look before clicking, just with that context in mind.";
+    alertContext.style.display = "block";
+  } else if (isSalesPitch && bannerClass === "safe") {
+    alertContext.textContent = "📣 Please note, this email reads like a sales pitch or cold outreach — nothing here raised a security concern, just flagging the tone.";
     alertContext.style.display = "block";
   } else {
     alertContext.style.display = "none";
@@ -3539,6 +3593,7 @@ const CHECK_GLOSSARY = {
   "Subject URLs": "Checks for links placed directly in the subject line — an unusual and risky spot for a legitimate sender to put one.",
   "URL Body Check": "Checks every link in the message body — unwraps Safe Links/Proofpoint/Mimecast-style rewrapped links to see the real destination, and looks for typosquats, look-alike characters, number substitutions, brand names hidden in subdomains, and shorteners that hide where a link actually goes.",
   "Email Type": "A category label, not a security check — flags whether this looks like a marketing/vendor bulk email (unsubscribe link, copyright footer) versus standard correspondence. Purely informational: it never changes the safety score or skips any check.",
+  "Sales Pitch Tone": "A category label, not a security check — flags one-to-one cold sales outreach based on typical phrasing (\"reached out a few times,\" \"strong fit\") and sales-role titles in the signature. Purely informational: it never changes the safety score or skips any check.",
   "Display Name Check": "Compares the sender's display name against their actual domain to catch company names or job titles that don't line up with who's really sending it.",
   "Body Contact Check": "Compares phone numbers or emails listed in the message body against the sender's real domain to catch mismatched contact info.",
   "BEC Language Check": "Scans the wording for phrases common in Business Email Compromise scams — urgency, secrecy, 'kindly advise', wire-transfer language, etc.",
