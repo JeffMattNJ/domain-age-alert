@@ -1140,6 +1140,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkFreeSubdomain(senderDomain)),                        // instant
       Promise.resolve(checkSubjectUrls(subject)),                               // instant
       Promise.resolve(checkDisplayNameDomainMismatch(senderName, senderDomain, senderEmail)), // instant - BEC detection
+      Promise.resolve(checkInternalIdentityImpersonation(senderName, bodyText, senderDomain, recipientDomain)),
       Promise.resolve(checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain)),  // instant - contact mismatch
       Promise.resolve(checkBECLanguage(subject, bodyText)),                                  // instant - urgency/BEC patterns
       Promise.resolve(checkCCHijack(senderDomain, ccList, bodyText, recipientDomain)),
@@ -2005,6 +2006,89 @@ function checkBodyUrls(bodyText, senderDomain) {
 
 
 // ── CHECK 11: Display name vs sender domain mismatch (BEC detection) ─────────
+// ── CHECK: Internal identity impersonation (no list to maintain) ───────────
+// The single most dangerous BEC pattern is using the real name of someone at
+// the RECIPIENT's own company, sent from a domain that has nothing to do with
+// them. Rather than a hardcoded list of "known executives" (which can never
+// keep up with every employee at mattnj or every client), this compares the
+// claimed identity — the display name, plus a name found in the body's own
+// closing signature — against the RECIPIENT's own domain, which is always
+// already known (no setup needed). "Matthijssen" relating to "mattnj.com" is
+// detected the same way for anyone at any client, not just one hardcoded name.
+// Requires a corroborating signal (an authority title, or payment/urgency
+// language) alongside the name-domain relation, specifically to avoid
+// false-flagging an ordinary person whose name happens to share a few letters
+// with the recipient's domain by coincidence (e.g. "Matthew" vs "mattnj").
+const AUTHORITY_TITLES = ["owner","ceo","president","founder","chief executive",
+  "managing director","principal","chairman","chairwoman","chair"];
+const IMPERSONATION_REQUEST_PHRASES = ["please pay","pay today","send payment",
+  "wire","deposit account","banking details","bank details","urgent","account number",
+  "routing number","payroll","direct deposit"];
+
+function checkInternalIdentityImpersonation(displayName, bodyText, senderDomain, recipientDomain) {
+  if (!displayName || !recipientDomain) {
+    return { name:"Internal Identity Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"Not enough information to check.", weight:0 };
+  }
+  // Genuinely internal mail — not impersonation, nothing to flag.
+  if (senderDomain === recipientDomain || senderDomain.endsWith("." + recipientDomain)) {
+    return { name:"Internal Identity Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"Sender domain matches the recipient's own domain.", weight:0 };
+  }
+
+  const recipientBase = (recipientDomain.split(".")[0] || "").toLowerCase();
+  if (recipientBase.length < 4) {
+    return { name:"Internal Identity Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"Recipient domain too short to compare reliably.", weight:0 };
+  }
+
+  // Pull a short signature snippet from the body — the line(s) right after a
+  // common sign-off — as a second source of "who does this claim to be from"
+  // beyond just the From: display name.
+  const bodyLower = (bodyText || "").toLowerCase();
+  const signoffMatch = bodyLower.match(/(?:thanks|regards|sincerely|best|warm regards|kind regards)[,.]?\s*\n+\s*([a-z][a-z\s.'-]{2,40})/i);
+  const signatureName = signoffMatch ? signoffMatch[1].trim() : "";
+
+  const claimedText = (displayName + " " + signatureName).toLowerCase();
+  const nameWords = claimedText.split(/[\s,.'-]+/).filter(w => w.length >= 4);
+
+  const relatesTo = (word, domainBase) =>
+    domainBase.includes(word) || word.includes(domainBase) ||
+    word.slice(0,4) === domainBase.slice(0,4);
+
+  const claimsConnectionToRecipient = nameWords.some(w => relatesTo(w, recipientBase));
+  if (!claimsConnectionToRecipient) {
+    return { name:"Internal Identity Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"No claimed connection to the recipient's own organization detected.", weight:0 };
+  }
+
+  // The sender's own domain plausibly relates to the claimed name or the
+  // recipient's domain (e.g. a legitimate subsidiary or partner) — not
+  // clearly suspicious on its own.
+  const senderBase = (senderDomain.split(".")[0] || "").toLowerCase();
+  const senderPlausiblyRelated = nameWords.some(w => relatesTo(w, senderBase)) || relatesTo(senderBase, recipientBase);
+  if (senderPlausiblyRelated) {
+    return { name:"Internal Identity Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"Sender domain plausibly relates to the claimed identity.", weight:0 };
+  }
+
+  // Require a corroborating signal — an authority title, or a payment/urgency
+  // ask — so an ordinary person whose name happens to share a few letters
+  // with the recipient's domain doesn't get flagged on name-similarity alone.
+  const hasAuthorityTitle = AUTHORITY_TITLES.some(t => bodyLower.includes(t));
+  const hasRequestLanguage = IMPERSONATION_REQUEST_PHRASES.some(p => bodyLower.includes(p));
+  if (!hasAuthorityTitle && !hasRequestLanguage) {
+    return { name:"Internal Identity Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"Name similarity alone, with no authority claim or request language — not enough to flag.", weight:0 };
+  }
+
+  return {
+    name:"Internal Identity Impersonation", icon:"🚨", status:"fail", badge:"IMPERSONATING YOUR ORG",
+    desc:`"${displayName}" appears to be claiming an identity connected to your own organization (${recipientDomain}), but this email is sent from an unrelated domain "${senderDomain}"${hasAuthorityTitle ? ", and claims an authority/ownership title" : ""}. This is one of the most common and dangerous BEC patterns. Verify through a separate channel (phone, in person) before acting on any request in this email.`,
+    weight: 50
+  };
+}
+
 function checkDisplayNameDomainMismatch(displayName, senderDomain, senderEmail) {
   senderEmail = (senderEmail || "").toLowerCase();
   if (!displayName) {
@@ -2436,6 +2520,7 @@ function checkFinancialRequest(subject, bodyText) {
     "update my bank","change my bank","new bank account","bank account change",
     "banking information","bank details","bank info","new account number",
     "routing number","account number","payroll update","paycheck deposit",
+    "deposit account",
     // Wire transfer
     "wire transfer","wire funds","wire the","send wire","initiate a wire",
     // ACH
@@ -3622,6 +3707,7 @@ const CHECK_GLOSSARY = {
   "Email Type": "A category label, not a security check — flags whether this looks like a marketing/vendor bulk email (unsubscribe link, copyright footer) versus standard correspondence. Purely informational: it never changes the safety score or skips any check.",
   "Sales Pitch Tone": "A category label, not a security check — flags one-to-one cold sales outreach based on typical phrasing (\"reached out a few times,\" \"strong fit\") and sales-role titles in the signature. Purely informational: it never changes the safety score or skips any check.",
   "Display Name Check": "Compares the sender's display name against their actual domain to catch company names or job titles that don't line up with who's really sending it.",
+  "Internal Identity Impersonation": "Checks whether the sender's name (from the display name and body signature) suggests they're from your own organization, while the email actually comes from an unrelated domain — one of the most common and dangerous BEC patterns. No list to maintain — it compares against your own domain automatically.",
   "Body Contact Check": "Compares phone numbers or emails listed in the message body against the sender's real domain to catch mismatched contact info.",
   "BEC Language Check": "Scans the wording for phrases common in Business Email Compromise scams — urgency, secrecy, 'kindly advise', wire-transfer language, etc.",
   "CC Recipients": "Looks at who else is CC'd to catch 'thread hijacking' — where an attacker inserts a lookalike address into an existing conversation.",
