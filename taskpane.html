@@ -1154,6 +1154,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
     Promise.resolve(checkUrgencySecrecyAuthority(subject, bodyText)),
     Promise.resolve(checkCloudStoragePhishing(subject, bodyText, senderDomain)),
+    Promise.resolve(checkDeviceCodePhishing(subject, bodyText)),
     Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
     Promise.resolve(checkBodyUrls(bodyText, senderDomain)),
     Promise.resolve(checkEmailType(bodyText, internetHeaders)),
@@ -3398,6 +3399,27 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
     senderDomain.endsWith(".microsoft.com") ||
     senderDomain.endsWith(".sharepoint.com");
 
+  // A genuine SharePoint/OneDrive/DocuSign/Adobe Sign/Teams link can ONLY be
+  // produced by the real platform — a third party's own tenant sending a
+  // real document link still has to route through the platform's own domain.
+  // This is a much fairer signal than sender-domain exemption: it correctly
+  // clears the overwhelming majority of real notifications (which come from
+  // a client's or partner's OWN domain, not literally sharepoint.com), while
+  // still catching a fake notification that claims to be from one of these
+  // platforms but has no matching real link to back it up — that mismatch is
+  // the actual tell, regardless of who sent it.
+  const REAL_PLATFORM_LINK_PATTERNS = {
+    sharepoint: /https?:\/\/[a-z0-9.-]*\.sharepoint\.com/i,
+    onedrive:   /https?:\/\/(1drv\.ms|[a-z0-9.-]*\.sharepoint\.com|onedrive\.live\.com)/i,
+    docusign:   /https?:\/\/[a-z0-9.-]*\.docusign\.(com|net)/i,
+    adobesign:  /https?:\/\/[a-z0-9.-]*\.(adobesign|echosign)\.com|https?:\/\/[a-z0-9.-]*documents\.adobe\.com/i,
+    teams:      /https?:\/\/(teams\.microsoft\.com|teams\.live\.com)/i,
+  };
+  const hasRealPlatformLink = (platformKey) => {
+    const pattern = REAL_PLATFORM_LINK_PATTERNS[platformKey];
+    return !!pattern && pattern.test(bodyText || "");
+  };
+
   // SharePoint phishing patterns — deliberately NOT matching the bare word
   // "sharepoint" alone. An MSP's staff will constantly mention SharePoint,
   // OneDrive, Teams, etc. by name in ordinary IT support conversations (this
@@ -3419,6 +3441,22 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
   const dropboxPatterns = [
     "view in dropbox","shared via dropbox","dropbox link","dropbox file has been shared"
   ];
+  const docusignPatterns = [
+    "requested your signature","docusign envelope","signature required",
+    "complete with docusign","review and sign the document","waiting for your signature"
+  ];
+  const adobeSignPatterns = [
+    "adobe acrobat sign","adobe sign agreement","agreement from","sign the agreement",
+    "action required: agreement","esign"
+  ];
+  const teamsPatterns = [
+    "sent a message in","new message in teams","view message in teams",
+    "missed message in teams","teams message notification"
+  ];
+  const voicemailPatterns = [
+    "voicemail from","new voicemail","missed call notification",
+    "listen to voicemail","voicemail notification"
+  ];
   const genericCloudPatterns = [
     "click to view document","click here to view","view document online",
     "open the document","access the file","download the file",
@@ -3426,20 +3464,64 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
     "your document is ready","document awaiting your review"
   ];
 
-  const hasSharePoint  = sharepointPatterns.some(p => combined.includes(p));
-  const hasOneDrive    = oneDrivePatterns.some(p => combined.includes(p));
+  const hasSharePoint  = sharepointPatterns.some(p => combined.includes(p)) ||
+    (combined.includes("sharepoint") && (combined.includes("shared a file with you") || combined.includes("document shared")));
+  const hasOneDrive    = oneDrivePatterns.some(p => combined.includes(p)) ||
+    (combined.includes("onedrive") && (combined.includes("shared") && combined.includes("with you")));
   const hasGDrive      = googleDrivePatterns.some(p => combined.includes(p));
   const hasDropbox     = dropboxPatterns.some(p => combined.includes(p));
+  const hasDocusign    = docusignPatterns.some(p => combined.includes(p));
+  const hasAdobeSign   = adobeSignPatterns.some(p => combined.includes(p));
+  const hasTeams       = teamsPatterns.some(p => combined.includes(p));
+  const hasVoicemail   = voicemailPatterns.some(p => combined.includes(p));
   const hasGenericLink = genericCloudPatterns.some(p => combined.includes(p));
+
+  const legitimacyNotes = [];
 
   if (!isLegitSender) {
     if (hasSharePoint) {
-      issues.push("SharePoint link from non-Microsoft sender — attackers send fake SharePoint notifications to steal Microsoft credentials. Verify this is a genuine Microsoft notification before clicking.");
-      weight += 30;
+      if (hasRealPlatformLink('sharepoint')) {
+        legitimacyNotes.push("SharePoint");
+      } else {
+        issues.push("SharePoint link from non-Microsoft sender — attackers send fake SharePoint notifications to steal Microsoft credentials. Verify this is a genuine Microsoft notification before clicking.");
+        weight += 30;
+      }
     }
     if (hasOneDrive) {
-      issues.push("OneDrive link from non-Microsoft sender — fake OneDrive sharing notifications are commonly used to redirect users to credential-stealing pages. Go directly to onedrive.com instead of clicking.");
-      weight += 30;
+      if (hasRealPlatformLink('onedrive')) {
+        legitimacyNotes.push("OneDrive");
+      } else {
+        issues.push("OneDrive link from non-Microsoft sender — fake OneDrive sharing notifications are commonly used to redirect users to credential-stealing pages. Go directly to onedrive.com instead of clicking.");
+        weight += 30;
+      }
+    }
+    if (hasDocusign) {
+      if (hasRealPlatformLink('docusign')) {
+        legitimacyNotes.push("DocuSign");
+      } else {
+        issues.push("DocuSign signature request from non-DocuSign sender — fake document-signing notifications are a common credential-phishing lure. Verify directly with the sender before clicking.");
+        weight += 30;
+      }
+    }
+    if (hasAdobeSign) {
+      if (hasRealPlatformLink('adobesign')) {
+        legitimacyNotes.push("Adobe Sign");
+      } else {
+        issues.push("Adobe Sign agreement notification from non-Adobe sender — verify directly with the sender before clicking any signature/agreement link.");
+        weight += 30;
+      }
+    }
+    if (hasTeams) {
+      if (hasRealPlatformLink('teams')) {
+        legitimacyNotes.push("Teams");
+      } else {
+        issues.push("Teams message notification from non-Microsoft sender — fake Teams notifications are a growing credential-phishing lure. Open Teams directly instead of clicking a link.");
+        weight += 25;
+      }
+    }
+    if (hasVoicemail) {
+      issues.push("Voicemail notification from non-Microsoft sender — fake voicemail notifications are a common credential-phishing lure. Verify directly instead of clicking.");
+      weight += 20;
     }
     if (hasGDrive && !hasSharePoint && !hasOneDrive) {
       issues.push("Google Drive link from external sender. Verify the sender before clicking any document links.");
@@ -3456,17 +3538,22 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
   }
 
   // PDF phishing via cloud — "You have received a PDF via SharePoint/OneDrive"
+  const hasVerifiedCloudLink = legitimacyNotes.length > 0;
   const hasPdfCloud = (hasSharePoint || hasOneDrive || hasGDrive) &&
     (combined.includes("pdf") || combined.includes("invoice") || combined.includes("contract") || combined.includes("agreement"));
-  if (!isLegitSender && hasPdfCloud) {
+  if (!isLegitSender && !hasVerifiedCloudLink && hasPdfCloud) {
     issues.push("PDF document shared via cloud storage from external sender — common lure for credential phishing.");
     weight += 15;
   }
 
   if (issues.length === 0) {
-    if (hasSharePoint || hasOneDrive || hasGDrive || hasDropbox) {
+    if (legitimacyNotes.length > 0) {
+      return { name:"Cloud Link Check", icon:"✅", status:"pass", badge:"VERIFIED LINK",
+        desc:`Notification claims to be from ${legitimacyNotes.join("/")}, and the body contains a matching real link to that platform's own domain — a fake notification couldn't produce this. Appears legitimate.`, weight:0 };
+    }
+    if (hasSharePoint || hasOneDrive || hasGDrive || hasDropbox || hasDocusign || hasAdobeSign || hasTeams || hasVoicemail) {
       return { name:"Cloud Link Check", icon:"✅", status:"pass", badge:"LEGIT SENDER",
-        desc:`Cloud storage link detected from verified sender (${senderDomain}). Appears legitimate.`, weight:0 };
+        desc:`Cloud storage/notification link detected from verified sender (${senderDomain}). Appears legitimate.`, weight:0 };
     }
     return { name:"Cloud Link Check", icon:"✅", status:"pass", badge:"CLEAN", desc:"No cloud storage phishing patterns detected.", weight:0 };
   }
@@ -3477,6 +3564,57 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
     badge: weight >= 25 ? "CLOUD PHISHING" : "CLOUD CAUTION",
     desc: issues[0], weight
   };
+}
+
+// ── DEVICE CODE PHISHING (OAuth device-authorization abuse) ────────────────
+// A sophisticated, hard-to-detect attack: the email mimics a normal share or
+// message notification and asks the reader to visit a page — which can be
+// genuinely microsoft.com, no fake domain involved at all — and type in a
+// short code to "view" something. Entering that code actually authorizes the
+// ATTACKER's device to sign into the victim's account, with no password and
+// no MFA prompt shown to the victim at all. This is honestly NOT detectable
+// by looking at the destination (it's real) or checking for a lookalike
+// domain (there isn't one) — the compromise itself happens entirely outside
+// the email, on Microsoft's own real infrastructure. The one thing that IS
+// catchable from email content is the LURE pattern itself: a fake
+// notification combined with "go type in this code" instructions, which
+// legitimate share/message notifications never actually require.
+const NOTIFICATION_LURE_PATTERNS = [
+  "shared a file with you","shared 'document' with you","sent a message in",
+  "requested your signature","voicemail from","agreement from",
+  "shared with you","new message notification","file shared","left you a voicemail"
+];
+const CODE_ENTRY_PATTERNS = [
+  "enter the code","enter this code","enter the following code",
+  "microsoft.com/link","microsoft.com/devicelogin","device code",
+  "code will expire","enter code to sign in","to view this document, go to",
+  "go to https://microsoft.com","type in the code"
+];
+
+function checkDeviceCodePhishing(subject, bodyText) {
+  const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
+  if (combined.length < 10) return { name:"Device Code Phishing", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No content to analyze.", weight:0 };
+
+  const hasLure      = NOTIFICATION_LURE_PATTERNS.some(p => combined.includes(p));
+  const hasCodeEntry = CODE_ENTRY_PATTERNS.some(p => combined.includes(p));
+
+  if (hasLure && hasCodeEntry) {
+    return {
+      name:"Device Code Phishing", icon:"🚨", status:"fail", badge:"DEVICE CODE ATTACK",
+      desc:"This combines a fake share/message notification with instructions to enter a code on a separate page — the signature of device-code phishing. Even if the page is genuinely microsoft.com, entering the code can hand your account to an attacker with no password or MFA needed. Do not enter any code from this email anywhere.",
+      weight: 50
+    };
+  }
+  if (hasCodeEntry) {
+    return {
+      name:"Device Code Phishing", icon:"⚠️", status:"warn", badge:"CODE ENTRY REQUEST",
+      desc:"This email asks you to enter a code on another page. Legitimate notifications rarely work this way — verify independently before entering any code, even on a genuinely real Microsoft page.",
+      weight: 20
+    };
+  }
+  return { name:"Device Code Phishing", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No device-code phishing pattern detected.", weight:0 };
 }
 
 // ── HIDDEN CHARACTER INJECTION CHECK ────────────────────────────────────────
@@ -3719,7 +3857,8 @@ const CHECK_GLOSSARY = {
   "Attachments": "Scans attached files for risky types and tricks — double file extensions, password-protected archives, or files disguised as something safer.",
   "Credential Harvesting": "Looks for language and links typically used to trick someone into typing a username and password into a fake login page.",
   "Gift Card / Crypto": "Flags requests for gift cards, cryptocurrency, or peer-to-peer payment apps — a hallmark of executive-impersonation scams.",
-  "Cloud Link Check": "Flags links to SharePoint, OneDrive, Google Drive, or Dropbox that don't match the sender's real identity — a common credential-phishing lure.",
+  "Cloud Link Check": "Flags fake notifications for SharePoint, OneDrive, Google Drive, Dropbox, Teams, DocuSign, Adobe Sign, or voicemail that don't match the sender's real identity — a common credential-phishing lure.",
+  "Device Code Phishing": "Flags a fake share/message notification combined with instructions to enter a code on another page — the signature of device-code phishing, a sophisticated attack that can hand over your account with no password or MFA prompt, even when the page really is microsoft.com.",
   "Hidden Character Check": "Looks for invisible characters hidden inside words — a trick used to sneak trigger words (like 'invoice' or 'wire') past keyword scanners.",
   "BEC Triple Signal": "Fires when several separate moderate warning signs stack up together at once, which is a stronger indicator of fraud than any single flag alone.",
   "Combined Risk": "A meta-check that raises the alarm when multiple individual red flags line up into a known attack pattern (e.g. a fake executive + a wire request + urgency)."
