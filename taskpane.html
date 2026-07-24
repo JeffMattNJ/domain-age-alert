@@ -1148,7 +1148,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkOrgImpersonation(subject, bodyText, senderDomain, recipientDomain)),
     Promise.resolve(checkEmailAuthentication(internetHeaders, senderDomain, recipientDomain)),
     Promise.resolve(checkMicrosoftSpamSignals(internetHeaders)),
-    Promise.resolve(checkThreadIntegrity(subject, internetHeaders)),
+    Promise.resolve(checkThreadIntegrity(subject, internetHeaders, bodyText, senderDomain, recipientDomain)),
     Promise.resolve(checkAttachments(attachments, bodyText)),
     Promise.resolve(checkCredentialHarvesting(subject, bodyText)),
     Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
@@ -3096,19 +3096,69 @@ function checkMicrosoftSpamSignals(headers) {
 }
 
 // ── CHECK: Thread integrity (Fake RE/FWD) ─────────────────────────────────────
-function checkThreadIntegrity(subject, headers) {
-  if (!subject) return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"No subject to analyze.", weight:0 };
-  const sub = subject.toLowerCase().trim();
-  const looksLikeReply = sub.startsWith("re:") || sub.startsWith("fw:") || sub.startsWith("fwd:");
-  if (!looksLikeReply) return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"Subject does not claim to be a reply or forward.", weight:0 };
-  const hasInReplyTo  = /In-Reply-To:/i.test(headers || "");
-  const hasReferences = /^References:/im.test(headers || "");
-  if (!hasInReplyTo && !hasReferences) {
-    return { name:"Thread Integrity", icon:"⚠️", status:"warn", badge:"FAKE THREAD",
-      desc:`Subject starts with "${subject.split(":")[0]}:" but this email has no valid thread history headers. It may be impersonating a reply to appear familiar and trusted.`,
-      weight:20 };
+function checkThreadIntegrity(subject, headers, bodyText, senderDomain, recipientDomain) {
+  const subjectResult = (() => {
+    if (!subject) return null;
+    const sub = subject.toLowerCase().trim();
+    const looksLikeReply = sub.startsWith("re:") || sub.startsWith("fw:") || sub.startsWith("fwd:");
+    if (!looksLikeReply) return null;
+    const hasInReplyTo  = /In-Reply-To:/i.test(headers || "");
+    const hasReferences = /^References:/im.test(headers || "");
+    if (!hasInReplyTo && !hasReferences) {
+      return { name:"Thread Integrity", icon:"⚠️", status:"warn", badge:"FAKE THREAD",
+        desc:`Subject starts with "${subject.split(":")[0]}:" but this email has no valid thread history headers. It may be impersonating a reply to appear familiar and trusted.`,
+        weight:20 };
+    }
+    return null;
+  })();
+  if (subjectResult) return subjectResult;
+
+  // Body-based check: does the email contain what looks like an embedded
+  // quoted conversation (a real "wrote:" pattern, or multiple quoted
+  // From/To/Cc header lines) with named participants at OTHER domains — and
+  // if so, does the ACTUAL sender relate to any of them at all? A hijacked or
+  // fabricated reply chain is a classic technique to borrow the appearance
+  // of a real, trusted conversation while sending from unrelated
+  // infrastructure. This catches it even when the subject doesn't literally
+  // say "Re:"/"Fw:" — exactly the case that the subject-only check above
+  // would otherwise miss entirely.
+  if (!bodyText || !senderDomain) {
+    return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"Not enough information to check.", weight:0 };
   }
-  return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"VALID THREAD", desc:"Reply/forward subject is consistent with valid thread headers.", weight:0 };
+  // Internal mail — a colleague forwarding an external thread internally is
+  // completely normal and shouldn't be flagged.
+  if (senderDomain === recipientDomain || (recipientDomain && senderDomain.endsWith("." + recipientDomain))) {
+    return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"Internal mail — not applicable.", weight:0 };
+  }
+
+  const hasEmbeddedConversation = /\bwrote:/i.test(bodyText) ||
+    (bodyText.match(/^(?:From|To|Cc):.*$/gim) || []).length >= 2;
+  if (!hasEmbeddedConversation) {
+    return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"No embedded conversation history to check.", weight:0 };
+  }
+
+  const quotedDomains = new Set(
+    (bodyText.match(/@([a-z0-9.-]+\.[a-z]{2,})/gi) || [])
+      .map(m => m.slice(1).toLowerCase())
+  );
+  if (quotedDomains.size === 0) {
+    return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"OK", desc:"No other participant domains found in the embedded conversation.", weight:0 };
+  }
+
+  const senderRelatesToAny = [...quotedDomains].some(d =>
+    d === senderDomain || d.endsWith("." + senderDomain) || senderDomain.endsWith("." + d)
+  );
+  if (senderRelatesToAny) {
+    return { name:"Thread Integrity", icon:"✅", status:"pass", badge:"VALID THREAD",
+      desc:"Sender relates to at least one participant in the embedded conversation history.", weight:0 };
+  }
+
+  const otherParticipants = [...quotedDomains].filter(d => d !== senderDomain);
+  return {
+    name:"Thread Integrity", icon:"🚨", status:"fail", badge:"HIJACKED THREAD",
+    desc:`This email contains what looks like a real conversation between other people (${otherParticipants.slice(0,2).join(", ")}), but the actual sending domain "${senderDomain}" has no relationship to any of them. This is a common technique — borrowing a real, unrelated conversation to appear trustworthy while sending from unrelated infrastructure. Do not trust this email based on the quoted content alone.`,
+    weight: 45
+  };
 }
 
 // ── CHECK: Attachment risk (including PDF, HTML, double extension) ─────────────
@@ -3561,6 +3611,22 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
     if (hasGenericLink && !hasSharePoint && !hasOneDrive && !hasGDrive && !hasDropbox) {
       issues.push("Email contains generic 'click to view document' language from an external sender. Verify the sender before clicking any links.");
       weight += 10;
+    }
+    // Form-builder tools (JotForm, Typeform, Google/Microsoft Forms, etc.)
+    // are legitimate SaaS on their own — used constantly for real surveys
+    // and intake forms — but combined with document review/approval
+    // language, that's a mismatch: a real document to review or approve
+    // doesn't route through a generic form tool. This combination is a
+    // known technique for hosting fake credential-harvesting forms
+    // specifically because the form-builder's own domain is legitimate and
+    // rarely gets blocked by anything domain-reputation-based.
+    const formBuilderDomains = ["jotform.com","typeform.com","forms.office.com",
+      "formstack.com","wufoo.com","cognitoforms.com","123formbuilder.com","surveymonkey.com"];
+    const hasFormBuilderLink = formBuilderDomains.some(d => (bodyText||"").toLowerCase().includes(d));
+    const hasApprovalLure = /\breview\b/i.test(combined) && /appro(v[ae]|val)/i.test(combined);
+    if (hasFormBuilderLink && hasApprovalLure) {
+      issues.push("Document review/approval language combined with a link to a generic form-building tool, not a real document platform — a common technique for hosting fake credential-harvesting forms, since the form-builder's own domain is legitimate and rarely blocked.");
+      weight += 25;
     }
   }
 
