@@ -1158,7 +1158,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
     Promise.resolve(checkBodyUrls(bodyText, senderDomain)),
     Promise.resolve(checkEmailType(bodyText, internetHeaders)),
-    Promise.resolve(checkSalesPitchTone(bodyText)),
+    Promise.resolve(checkSalesPitchTone(bodyText, senderEmail)),
     ]);
 
     setSafetyStatus("");
@@ -3013,7 +3013,16 @@ const SALES_PITCH_PHRASES = [
   "following up on my previous","if now isn't the right time","book a time",
   "share how we've helped","keep this brief","best place to begin",
   "happy to send over","let me know what works best for you",
-  "no response yet","best person to speak with","quick intro"
+  "no response yet","best person to speak with","quick intro",
+  // Newer lead-gen/growth-hacker cold-outreach style — different vocabulary
+  // than traditional enterprise sales copy, but just as recognizable: pay-
+  // per-lead pitches, "set it up in N minutes" urgency, dismissive framing
+  // of the alternative ("prospecting the hard way", "tire kickers").
+  "warm leads","warm buyers","cold lists","prospecting the hard way",
+  "tire kickers","in-market buyers","set it up in","get your first",
+  "quick walkthrough video","the math speaks for itself",
+  "not names on a spreadsheet","test real demand","without a big commitment",
+  "i'll keep this short"
 ];
 const SALES_ROLE_TITLES = [
   "sales manager","account executive","business development","channel sales",
@@ -3021,25 +3030,43 @@ const SALES_ROLE_TITLES = [
   "sales director","business development manager"
 ];
 
-function checkSalesPitchTone(bodyText) {
+function checkSalesPitchTone(bodyText, senderEmail) {
   const bodyLower = (bodyText || "").toLowerCase();
   const phraseMatches = SALES_PITCH_PHRASES.filter(p => bodyLower.includes(p));
   const hasRoleTitle = SALES_ROLE_TITLES.some(t => bodyLower.includes(t));
 
+  // A repeated drip sequence — the same external sender's own prior messages
+  // quoted multiple times in the thread — is itself a strong signal of an
+  // automated cold-outreach campaign, regardless of the exact wording used.
+  // Count occurrences of the sender's own address inside quoted "X wrote:"
+  // blocks, which every mail client includes when quoting prior messages.
+  let repeatedOutreachCount = 0;
+  if (senderEmail) {
+    const senderEsc = senderEmail.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wroteMatches = bodyLower.match(new RegExp(`${senderEsc}[^\\n]{0,20}wrote:`, "g")) || [];
+    repeatedOutreachCount = wroteMatches.length;
+  }
+  const isRepeatedDrip = repeatedOutreachCount >= 2;
+
   // Require more than one generic phrase, or one phrase plus a sales-role
-  // title in the signature — a single coincidental phrase alone (e.g. a
-  // genuine client saying "let me know what works best for you") shouldn't
-  // be enough to label something a sales pitch.
-  const soundsLikeSalesPitch = phraseMatches.length >= 2 || (phraseMatches.length >= 1 && hasRoleTitle);
+  // title in the signature, OR one phrase plus a confirmed repeated drip
+  // sequence from the same sender — a single coincidental phrase alone
+  // (e.g. a genuine client saying "let me know what works best for you")
+  // shouldn't be enough to label something a sales pitch on its own.
+  const soundsLikeSalesPitch = phraseMatches.length >= 2 ||
+    (phraseMatches.length >= 1 && (hasRoleTitle || isRepeatedDrip));
 
   if (!soundsLikeSalesPitch) {
     return { name:"Sales Pitch Tone", icon:"✅", status:"pass", badge:"STANDARD",
       desc:"No cold-outreach/sales-pitch language detected.", weight:0 };
   }
 
+  const corroboration = hasRoleTitle ? " and a sales-role title in the signature"
+    : isRepeatedDrip ? ` and ${repeatedOutreachCount} prior messages from the same sender in this thread (a drip sequence)`
+    : "";
   return {
     name:"Sales Pitch Tone", icon:"📣", status:"info", badge:"SALES PITCH",
-    desc:"This reads like a sales pitch or cold outreach (phrasing like \"" + (phraseMatches[0] || "introduce myself") + "\"" + (hasRoleTitle ? " and a sales-role title in the signature" : "") + "). Informational only — this doesn't affect the safety score or skip any check.",
+    desc:"This reads like a sales pitch or cold outreach (phrasing like \"" + (phraseMatches[0] || "introduce myself") + "\"" + corroboration + "). Informational only — this doesn't affect the safety score or skip any check.",
     weight:0
   };
 }
