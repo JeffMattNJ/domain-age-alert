@@ -3697,6 +3697,18 @@ const CODE_ENTRY_PATTERNS = [
   "code will expire","enter code to sign in","to view this document, go to",
   "go to https://microsoft.com","type in the code"
 ];
+// "device code" specifically is also a completely normal, common term in IT
+// staff discussing Conditional Access / Entra ID policy configuration (e.g.
+// a policy literally named "Block Device Code & Authentication") — this is
+// the exact case that exposed the gap. Only exempts the weaker code-entry-
+// alone signal below; the full lure+code-entry combination (the actual
+// attack signature) still gets flagged regardless of context, since that's
+// a much more specific, reliable signal not worth creating a bypass for.
+const IT_ADMIN_POLICY_CONTEXT = [
+  "conditional access","entra","azure ad","identity protection","mfa policy",
+  "block sign-in","risky sign-in","authentication policy","p2 license",
+  "intune","named locations","security defaults","ca policy","risk-based"
+];
 
 function checkDeviceCodePhishing(subject, bodyText) {
   const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
@@ -3705,6 +3717,7 @@ function checkDeviceCodePhishing(subject, bodyText) {
 
   const hasLure      = NOTIFICATION_LURE_PATTERNS.some(p => combined.includes(p));
   const hasCodeEntry = CODE_ENTRY_PATTERNS.some(p => combined.includes(p));
+  const hasITAdminContext = IT_ADMIN_POLICY_CONTEXT.some(p => combined.includes(p));
 
   if (hasLure && hasCodeEntry) {
     return {
@@ -3712,6 +3725,10 @@ function checkDeviceCodePhishing(subject, bodyText) {
       desc:"This combines a fake share/message notification with instructions to enter a code on a separate page — the signature of device-code phishing. Even if the page is genuinely microsoft.com, entering the code can hand your account to an attacker with no password or MFA needed. Do not enter any code from this email anywhere.",
       weight: 50
     };
+  }
+  if (hasCodeEntry && hasITAdminContext) {
+    return { name:"Device Code Phishing", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"Mentions device codes in what looks like an IT/Conditional Access policy discussion, not a notification lure.", weight:0 };
   }
   if (hasCodeEntry) {
     return {
