@@ -618,7 +618,13 @@
 
       try {
         const item = Office.context.mailbox.item;
-        const from = item.from;
+        // Appointment items (meeting invites) expose "organizer" instead of
+        // "from" — a genuinely different property, not just a naming quirk.
+        // Without this fallback, every appointment would show "Could not
+        // read sender address" even once the manifest allows the add-in to
+        // open on one at all.
+        const isAppointment = item.itemType === Office.MailboxEnums.ItemType.Appointment;
+        const from = isAppointment ? item.organizer : item.from;
 
         if (!from || !from.emailAddress) { showError("Could not read sender address."); return; }
 
@@ -1105,12 +1111,20 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
 
   if (!senderEmail) {
     const item = Office.context.mailbox.item;
-    senderEmail     = item.from?.emailAddress?.toLowerCase() || "";
-    senderName      = item.from?.displayName || "";
+    const isAppointment = item.itemType === Office.MailboxEnums.ItemType.Appointment;
+    const from = isAppointment ? item.organizer : item.from;
+    senderEmail     = from?.emailAddress?.toLowerCase() || "";
+    senderName      = from?.displayName || "";
     senderDomain    = senderEmail.split("@")[1] || "";
     subject         = item.subject || "";
-    replyTo         = item.replyTo || [];
-    ccList          = item.cc      || [];
+    replyTo         = isAppointment ? [] : (item.replyTo || []);
+    // Appointments have no CC in the traditional sense — required/optional
+    // attendees are the closest equivalent ("who else is included on this"),
+    // close enough for the CC Recipients check's suspicion logic to still be
+    // meaningful, though it's an approximation, not a perfect match.
+    ccList          = isAppointment
+      ? [...(item.requiredAttendees || []), ...(item.optionalAttendees || [])]
+      : (item.cc || []);
     recipientEmail  = Office.context.mailbox.userProfile.emailAddress?.toLowerCase() || "";
     attachments     = item.attachments || [];
   }
