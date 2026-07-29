@@ -1225,6 +1225,12 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     const hasGiftCard        = results.some(r => r.name === "Gift Card / Crypto" && r.status === "fail");
     const hasCompanyMismatch = results.some(r => r.name === "Display Name Check" && r.badge === "COMPANY MISMATCH");
     const hasCloudPhishing   = results.some(r => r.name === "Cloud Link Check" && r.badge === "CLOUD PHISHING");
+    const hasSenderMismatch  = results.some(r => r.name === "On-Behalf-Of Sender Check" && r.badge === "SENDER MISMATCH");
+
+    if (hasNameMismatch && hasSenderMismatch) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"SPOOFED ORGANIZER",
+        desc:"Display name mismatch AND a real Sender header pointing somewhere completely different — two independent signals of a deliberately disguised sender, not a coincidence. Do not trust this message based on how it's displayed.", weight:25 });
+    }
 
     if (hasNameMismatch && hasFinancialFlag) {
       results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"PAYROLL DIVERSION RISK",
