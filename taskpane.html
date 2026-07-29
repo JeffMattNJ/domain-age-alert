@@ -1161,6 +1161,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
       Promise.resolve(checkFinancialRequest(subject, bodyText)),
       Promise.resolve(checkOrgImpersonation(subject, bodyText, senderDomain, recipientDomain)),
     Promise.resolve(checkEmailAuthentication(internetHeaders, senderDomain, recipientDomain)),
+    Promise.resolve(checkOnBehalfOfSender(internetHeaders, senderEmail, recipientDomain)),
     Promise.resolve(checkMicrosoftSpamSignals(internetHeaders)),
     Promise.resolve(checkThreadIntegrity(subject, internetHeaders, bodyText, senderDomain, recipientDomain)),
     Promise.resolve(checkAttachments(attachments, bodyText)),
@@ -2751,7 +2752,46 @@ function detectKnownMailRelay(headers) {
   return null;
 }
 
-// ── Helper: parse Authentication-Results header ───────────────────────────────
+// ── CHECK: On-Behalf-Of Sender mismatch ─────────────────────────────────────
+// The displayed From:/Organizer field is not necessarily who actually sent a
+// message — a separate Sender: header can name the real authenticated
+// sender, with Outlook's own UI rendering this as "X on behalf of Y." This is
+// exactly the mechanism that let a fake meeting invite display as
+// "Axa Equitable <calendar@mattnj.com>" while the real sender was a random
+// address at a free German webmail provider. Every other check in this file
+// (including internal-mail exemptions) works off the displayed address —
+// without this check, a spoofed organizer that happens to match the
+// recipient's own domain would incorrectly pass as genuinely internal.
+function checkOnBehalfOfSender(internetHeaders, displayedEmail, recipientDomain) {
+  if (!internetHeaders || !displayedEmail) {
+    return { name:"On-Behalf-Of Sender Check", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"No header data to check.", weight:0 };
+  }
+  let senderMatch = internetHeaders.match(/^Sender:.*?<([^\s<>]+@[^\s<>]+)>/im);
+  if (!senderMatch) {
+    senderMatch = internetHeaders.match(/^Sender:\s*([^\s<>]+@[^\s<>]+)/im);
+  }
+  if (!senderMatch) {
+    return { name:"On-Behalf-Of Sender Check", icon:"✅", status:"pass", badge:"CLEAR",
+      desc:"No separate Sender header present — nothing to compare.", weight:0 };
+  }
+  const realSender = senderMatch[1].toLowerCase().replace(/[.,;]+$/, "");
+  const realSenderDomain = realSender.split("@")[1] || "";
+  const displayedDomain = displayedEmail.split("@")[1] || "";
+
+  if (!realSenderDomain || realSenderDomain === displayedDomain) {
+    return { name:"On-Behalf-Of Sender Check", icon:"✅", status:"pass", badge:"MATCHES",
+      desc:"The actual Sender header matches the displayed address — no mismatch.", weight:0 };
+  }
+
+  const realSenderIsRecipientDomain = recipientDomain && (realSenderDomain === recipientDomain || realSenderDomain.endsWith("." + recipientDomain));
+  return {
+    name:"On-Behalf-Of Sender Check", icon:"🚨", status:"fail", badge:"SENDER MISMATCH",
+    desc:`This message displays "${displayedEmail}" as the sender, but the actual Sender header shows "${realSender}" — a completely different address${realSenderIsRecipientDomain ? "" : `, at a domain unrelated to ${displayedDomain}`}. "On behalf of" is a real, legitimate mail feature, but this exact mechanism is also commonly used to disguise a message's true origin behind a trusted-looking display name. Verify through a separate channel before trusting this message.`,
+    weight: 45
+  };
+}
+
 function parseAuthResults(headers) {
   const result = { spf:"none", dkim:"none", dmarc:"none", compauth:"none", reason:"", returnPath:"" };
   if (!headers) return result;
@@ -3976,6 +4016,7 @@ const CHECK_GLOSSARY = {
   "Financial Request": "Flags language asking for a payment, invoice, or a change to banking details — a hallmark of wire-fraud attempts.",
   "Org Impersonation": "Checks whether the email is pretending to be from your own organization while actually coming from an outside domain.",
   "Email Authentication": "Checks the cryptographic proof (SPF/DKIM/DMARC) that verifies a message really came from who it claims to be from, not just a forged 'From' name.",
+  "On-Behalf-Of Sender Check": "Checks whether the actual Sender header matches the displayed From/Organizer address — catches a spoofed display name (e.g. an outside sender dressing itself up as your own domain) using the same 'on behalf of' mechanism Outlook shows in its own UI.",
   "Spam Signals (M365)": "Uses Microsoft 365's own built-in spam-confidence score for this message, on top of everything this add-in checks separately.",
   "Thread Integrity": "Checks whether a 'Re:' or 'Fwd:' reply actually matches a real prior conversation, catching fake reply chains used to look trustworthy.",
   "Attachments": "Scans attached files for risky types and tricks — double file extensions, password-protected archives, or files disguised as something safer.",
