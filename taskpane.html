@@ -981,7 +981,7 @@ const PHISH_KEYWORDS = [
 ];
 
 const FREE_PROVIDERS = [
-  'gmail.com','yahoo.com','hotmail.com','aol.com',
+  'gmail.com','yahoo.com','hotmail.com','aol.com','outlook.com','live.com','msn.com',
   'icloud.com','protonmail.com','mail.com','yandex.com','gmx.com'
 ];
 
@@ -1145,7 +1145,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     const [domainAgeResult, ...instantResults] = await Promise.all([
       checkDomainAge(senderDomain),                                          // network (cached after first)
       Promise.resolve(checkDisplayName(senderName, senderEmail, senderDomain)), // instant
-      Promise.resolve(checkFreeProvider(senderDomain, senderName)),             // instant
+      Promise.resolve(checkFreeProvider(senderDomain, senderName, senderEmail)),             // instant
       Promise.resolve(checkReplyTo(senderEmail, replyToEmail)),                 // instant
       Promise.resolve(checkSubject(subject)),                                    // instant
       Promise.resolve(checkLookalike(senderDomain)),                            // instant
@@ -1349,7 +1349,7 @@ function checkDisplayName(name, email, domain) {
 }
 
 // ── CHECK 3: Free provider check ─────────────────────────────────────────
-function checkFreeProvider(domain, name) {
+function checkFreeProvider(domain, name, email) {
   if (!FREE_PROVIDERS.includes(domain)) {
     return { name:"Email Provider", icon:"✅", status:"pass", badge:"BUSINESS DOMAIN",
       desc:`${domain} is a dedicated business domain.`, weight:0 };
@@ -1362,9 +1362,22 @@ function checkFreeProvider(domain, name) {
     return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE PROVIDER",
       desc:`Appears official but sent from free provider ${domain}. Legitimate businesses use their own domains.`, weight:15 };
   }
+
+  // A username ending in random digits (e.g. "schreiberreiner19") is a classic
+  // throwaway/auto-generated account naming pattern, distinct from an ordinary
+  // personal address like "john.smith" — worth flagging more prominently, since
+  // this combination (free provider + auto-generated-looking username) is a
+  // common signature of a disposable account created for a single campaign.
+  const username = (email || "").split("@")[0] || "";
+  const usernameLooksThrowaway = /^[a-z]{4,}\d{2,4}$/i.test(username);
+  if (usernameLooksThrowaway) {
+    return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE EMAIL — THROWAWAY PATTERN",
+      desc:`Sent from ${domain} — a free consumer email provider — using a username pattern ("${username}") typical of a disposable, auto-generated account. Verify this is someone you know before acting on this email.`, weight:15 };
+  }
+
   // Always yellow for free providers — user should know even for personal emails
   return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE EMAIL",
-    desc:`Sent from ${domain} — a free consumer email provider. Verify this is someone you know before acting on the email.`, weight:5 };
+    desc:`Sent from ${domain} — a free consumer email provider. Verify this is someone you know before acting on the email.`, weight:10 };
 }
 
 // ── CHECK 4: Reply-to mismatch ────────────────────────────────────────────
@@ -2546,7 +2559,7 @@ function checkFinancialRequest(subject, bodyText) {
     // Wire transfer
     "wire transfer","wire funds","wire the","send wire","initiate a wire",
     // ACH
-    "ach transfer","ach payment","ach deposit",
+    "ach transfer","ach payment","ach deposit","ach update",
     // General financial
     "transfer funds","transfer money","send funds","send money",
     "payment information","payment details","billing information",
@@ -3580,7 +3593,14 @@ function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
   ];
   const docusignPatterns = [
     "requested your signature","docusign envelope","signature required",
-    "complete with docusign","review and sign the document","waiting for your signature"
+    "complete with docusign","review and sign the document","waiting for your signature",
+    // Generic signature-service lures that don't claim a specific real platform
+    // (like "Document Signature" from a random domain) — these evade the
+    // real-link verification entirely since no actual platform is even named,
+    // so the pattern itself has to be the catch.
+    "document signature request","document ready for review",
+    "document ready for signature","signature request","document requires your signature",
+    "signature needed","please sign the attached document"
   ];
   const adobeSignPatterns = [
     "adobe acrobat sign","adobe sign agreement","agreement from","sign the agreement",
