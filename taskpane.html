@@ -1169,6 +1169,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
     Promise.resolve(checkUrgencySecrecyAuthority(subject, bodyText)),
     Promise.resolve(checkCloudStoragePhishing(subject, bodyText, senderDomain)),
+    Promise.resolve(checkFinancialBrandImpersonation(bodyText, senderDomain)),
     Promise.resolve(checkDeviceCodePhishing(subject, bodyText)),
     Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
     Promise.resolve(checkBodyUrls(bodyText, senderDomain)),
@@ -1360,7 +1361,7 @@ function checkFreeProvider(domain, name, email) {
   if (looksOfficial) {
     // Free provider + official-sounding name = higher risk
     return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE PROVIDER",
-      desc:`Appears official but sent from free provider ${domain}. Legitimate businesses use their own domains.`, weight:15 };
+      desc:`Appears official but sent from free provider ${domain}. Legitimate businesses use their own domains.`, weight:38 };
   }
 
   // A username ending in random digits (e.g. "schreiberreiner19") is a classic
@@ -1372,12 +1373,17 @@ function checkFreeProvider(domain, name, email) {
   const usernameLooksThrowaway = /^[a-z]{4,}\d{2,4}$/i.test(username);
   if (usernameLooksThrowaway) {
     return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE EMAIL — THROWAWAY PATTERN",
-      desc:`Sent from ${domain} — a free consumer email provider — using a username pattern ("${username}") typical of a disposable, auto-generated account. Verify this is someone you know before acting on this email.`, weight:15 };
+      desc:`Sent from ${domain} — a free consumer email provider — using a username pattern ("${username}") typical of a disposable, auto-generated account. Verify this is someone you know before acting on this email.`, weight:32 };
   }
 
-  // Always yellow for free providers — user should know even for personal emails
+  // Any free consumer provider — outlook.com, gmail.com, hotmail.com, yahoo.com,
+  // etc. — now lands solidly in the "Proceed with Caution" tier on its own
+  // (score in the low-to-mid 70s), not just a quiet minor caution. A business
+  // email arriving from a free consumer account is inherently a much weaker
+  // trust signal than a real business domain, and deserves to be visibly
+  // felt in the overall verdict, not buried among passed checks.
   return { name:"Email Provider", icon:"⚠️", status:"warn", badge:"FREE EMAIL",
-    desc:`Sent from ${domain} — a free consumer email provider. Verify this is someone you know before acting on the email.`, weight:10 };
+    desc:`Sent from ${domain} — a free consumer email provider. Verify this is someone you know before acting on the email.`, weight:26 };
 }
 
 // ── CHECK 4: Reply-to mismatch ────────────────────────────────────────────
@@ -3531,6 +3537,57 @@ function checkUrgencySecrecyAuthority(subject, bodyText) {
 }
 
 // ── CHECK: SharePoint / OneDrive / Cloud storage phishing ─────────────────────
+// ── CHECK: Financial brand impersonation in body content ───────────────────
+// Known Brand Impersonation only checks the DISPLAY NAME against known brands
+// — it never looks at the body. A fake invoice/billing notice styled to look
+// like it's from PayPal, a bank, or a payment processor, sent from a totally
+// unrelated free-email or random domain, slips past every other check
+// entirely if the sender isn't literally claiming to BE that brand by name.
+// Deliberately requires the brand to appear near the very start of the body
+// (masthead-style — exactly how a fake notification opens) rather than just
+// anywhere, since plenty of genuine small-business invoices legitimately
+// mention "paid via PayPal" or "processed through Stripe" buried in normal
+// prose later on — that's an entirely different, benign pattern this is
+// designed not to catch.
+const FINANCIAL_BRANDS = {
+  "paypal": ["paypal.com"],
+  "venmo": ["venmo.com"],
+  "zelle": ["zellepay.com","zelle.com"],
+  "cash app": ["cash.app","squareup.com"],
+  "stripe": ["stripe.com"],
+  "chase bank": ["chase.com"],
+  "wells fargo": ["wellsfargo.com"],
+  "bank of america": ["bankofamerica.com"],
+  "citibank": ["citi.com","citibank.com"],
+  "american express": ["americanexpress.com","aexp.com"],
+  "capital one": ["capitalone.com"],
+};
+const OFFICIAL_NOTICE_CONTEXT = ["invoice","billing","checkout","customer support",
+  "order","payment received","your account","charged","receipt","transaction"];
+
+function checkFinancialBrandImpersonation(bodyText, senderDomain) {
+  const bodyLower = (bodyText || "").toLowerCase();
+  const trimmedBody = bodyLower.trim();
+
+  for (const [brand, realDomains] of Object.entries(FINANCIAL_BRANDS)) {
+    if (!trimmedBody.startsWith(brand)) continue;
+
+    const senderIsRealBrand = realDomains.some(d => senderDomain === d || senderDomain.endsWith("." + d));
+    if (senderIsRealBrand) continue;
+
+    const hasNoticeContext = OFFICIAL_NOTICE_CONTEXT.some(c => bodyLower.includes(c));
+    if (!hasNoticeContext) continue;
+
+    return {
+      name: "Financial Brand Impersonation", icon:"🚨", status:"fail", badge:"BRAND IMPERSONATION",
+      desc: `This email presents itself as an official notice from "${brand}" (invoice/billing language right at the top), but it's sent from "${senderDomain}" — completely unrelated to ${brand}'s real domain. This is a classic invoice-scam pattern. Do not call any phone number or click any link in this email — go directly to the real ${brand} website or app instead.`,
+      weight: 40
+    };
+  }
+  return { name:"Financial Brand Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No financial brand impersonation detected.", weight:0 };
+}
+
 function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
   const combined = ((subject||"") + " " + (bodyText||"")).toLowerCase();
   if (combined.length < 10) return { name:"Cloud Link Check", icon:"✅", status:"pass", badge:"CLEAR", desc:"No content to analyze.", weight:0 };
@@ -4049,6 +4106,7 @@ const CHECK_GLOSSARY = {
   "Credential Harvesting": "Looks for language and links typically used to trick someone into typing a username and password into a fake login page.",
   "Gift Card / Crypto": "Flags requests for gift cards, cryptocurrency, or peer-to-peer payment apps — a hallmark of executive-impersonation scams.",
   "Cloud Link Check": "Flags fake notifications for SharePoint, OneDrive, Google Drive, Dropbox, Teams, DocuSign, Adobe Sign, or voicemail that don't match the sender's real identity — a common credential-phishing lure.",
+  "Financial Brand Impersonation": "Flags an email that presents itself as an official notice from a known financial brand (PayPal, a bank, a payment processor) right at the top, while the sender's actual domain has no relationship to that brand at all — a classic fake-invoice scam pattern.",
   "Device Code Phishing": "Flags a fake share/message notification combined with instructions to enter a code on another page — the signature of device-code phishing, a sophisticated attack that can hand over your account with no password or MFA prompt, even when the page really is microsoft.com.",
   "Hidden Character Check": "Looks for invisible characters hidden inside words — a trick used to sneak trigger words (like 'invoice' or 'wire') past keyword scanners.",
   "BEC Triple Signal": "Fires when several separate moderate warning signs stack up together at once, which is a stronger indicator of fraud than any single flag alone.",
