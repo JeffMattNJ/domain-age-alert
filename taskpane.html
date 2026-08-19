@@ -1169,7 +1169,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
     Promise.resolve(checkUrgencySecrecyAuthority(subject, bodyText)),
     Promise.resolve(checkCloudStoragePhishing(subject, bodyText, senderDomain)),
-    Promise.resolve(checkFinancialBrandImpersonation(bodyText, senderDomain)),
+    Promise.resolve(checkOfficialBrandImpersonation(bodyText, senderDomain)),
     Promise.resolve(checkDeviceCodePhishing(subject, bodyText)),
     Promise.resolve(checkHiddenCharacters(rawSubject, rawBodyText)),
     Promise.resolve(checkBodyUrls(bodyText, senderDomain)),
@@ -3537,19 +3537,20 @@ function checkUrgencySecrecyAuthority(subject, bodyText) {
 }
 
 // ── CHECK: SharePoint / OneDrive / Cloud storage phishing ─────────────────────
-// ── CHECK: Financial brand impersonation in body content ───────────────────
+// ── CHECK: Official brand impersonation in body content ────────────────────
 // Known Brand Impersonation only checks the DISPLAY NAME against known brands
-// — it never looks at the body. A fake invoice/billing notice styled to look
-// like it's from PayPal, a bank, or a payment processor, sent from a totally
-// unrelated free-email or random domain, slips past every other check
-// entirely if the sender isn't literally claiming to BE that brand by name.
-// Deliberately requires the brand to appear near the very start of the body
-// (masthead-style — exactly how a fake notification opens) rather than just
-// anywhere, since plenty of genuine small-business invoices legitimately
-// mention "paid via PayPal" or "processed through Stripe" buried in normal
-// prose later on — that's an entirely different, benign pattern this is
-// designed not to catch.
-const FINANCIAL_BRANDS = {
+// — it never looks at the body. A fake invoice/delivery/account notice styled
+// to look like it's from PayPal, Amazon, UPS, a bank, or any other well-known
+// brand, sent from a totally unrelated free-email or random domain, slips
+// past every other check entirely if the sender isn't literally claiming to
+// BE that brand by name. Deliberately requires the brand to appear right at
+// the very start of the body (masthead-style — exactly how a fake
+// notification opens) rather than just anywhere, since plenty of genuine
+// small-business invoices legitimately mention "paid via PayPal" or "shipped
+// via UPS" buried in normal prose later on — that's an entirely different,
+// benign pattern this is designed not to catch.
+const IMPERSONATABLE_BRANDS = {
+  // Financial / payment
   "paypal": ["paypal.com"],
   "venmo": ["venmo.com"],
   "zelle": ["zellepay.com","zelle.com"],
@@ -3561,15 +3562,46 @@ const FINANCIAL_BRANDS = {
   "citibank": ["citi.com","citibank.com"],
   "american express": ["americanexpress.com","aexp.com"],
   "capital one": ["capitalone.com"],
+  // E-commerce / retail — fake order/delivery-fee scams are extremely common
+  "amazon": ["amazon.com"],
+  "ebay": ["ebay.com"],
+  "walmart": ["walmart.com"],
+  "best buy": ["bestbuy.com"],
+  "costco": ["costco.com"],
+  // Shipping / delivery — "pay a small fee to release your package" scams
+  "ups": ["ups.com"],
+  "fedex": ["fedex.com"],
+  "usps": ["usps.com"],
+  "dhl": ["dhl.com"],
+  // Tech / account-security notices — using the specific phrasing real
+  // phishing uses ("Apple ID", not bare "Apple") to avoid colliding with
+  // ordinary, unrelated uses of common English words
+  "apple id": ["apple.com"],
+  "apple support": ["apple.com"],
+  "microsoft account": ["microsoft.com"],
+  "netflix": ["netflix.com"],
+  // Government / tax — seasonal but high-stakes impersonation targets
+  "irs": ["irs.gov"],
+  "social security administration": ["ssa.gov"],
 };
-const OFFICIAL_NOTICE_CONTEXT = ["invoice","billing","checkout","customer support",
-  "order","payment received","your account","charged","receipt","transaction"];
+const OFFICIAL_NOTICE_CONTEXT = [
+  "invoice","billing","checkout","customer support","order","payment received",
+  "your account","charged","receipt","transaction",
+  // Shipping/delivery specific
+  "package","delivery","redelivery","tracking number","shipment","customs","out for delivery",
+  // Subscription/renewal
+  "subscription","renewal","auto-renew","membership",
+  // Account security
+  "account suspended","verify your account","unusual activity","account locked",
+  // Tax/government
+  "refund","tax return","stimulus",
+];
 
-function checkFinancialBrandImpersonation(bodyText, senderDomain) {
+function checkOfficialBrandImpersonation(bodyText, senderDomain) {
   const bodyLower = (bodyText || "").toLowerCase();
   const trimmedBody = bodyLower.trim();
 
-  for (const [brand, realDomains] of Object.entries(FINANCIAL_BRANDS)) {
+  for (const [brand, realDomains] of Object.entries(IMPERSONATABLE_BRANDS)) {
     if (!trimmedBody.startsWith(brand)) continue;
 
     const senderIsRealBrand = realDomains.some(d => senderDomain === d || senderDomain.endsWith("." + d));
@@ -3579,13 +3611,13 @@ function checkFinancialBrandImpersonation(bodyText, senderDomain) {
     if (!hasNoticeContext) continue;
 
     return {
-      name: "Financial Brand Impersonation", icon:"🚨", status:"fail", badge:"BRAND IMPERSONATION",
-      desc: `This email presents itself as an official notice from "${brand}" (invoice/billing language right at the top), but it's sent from "${senderDomain}" — completely unrelated to ${brand}'s real domain. This is a classic invoice-scam pattern. Do not call any phone number or click any link in this email — go directly to the real ${brand} website or app instead.`,
-      weight: 40
+      name: "Official Brand Impersonation", icon:"🚨", status:"fail", badge:"BRAND IMPERSONATION",
+      desc: `This email presents itself as an official notice from "${brand}" (right at the top), but it's sent from "${senderDomain}" — completely unrelated to ${brand}'s real domain. This is a classic impersonation-scam pattern. Do not call any phone number or click any link in this email — go directly to the real ${brand} website or app instead.`,
+      weight: 45
     };
   }
-  return { name:"Financial Brand Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
-    desc:"No financial brand impersonation detected.", weight:0 };
+  return { name:"Official Brand Impersonation", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"No official brand impersonation detected.", weight:0 };
 }
 
 function checkCloudStoragePhishing(subject, bodyText, senderDomain) {
@@ -4013,23 +4045,46 @@ function renderSafetyResults(results) {
   document.getElementById("alert-prefix").textContent = prefixText;
   document.getElementById("alert-reason").textContent = reasonText;
 
-  // Second, softer line of context — two distinct scenarios:
+  // Context notes — can show MULTIPLE simultaneously, not just one at a time:
   // 1) Marketing/vendor email AND a notice/alert is showing — helps the
   //    reader understand "this caution is common for this type of email."
   // 2) Fully CLEAR result, but the content reads like a cold sales pitch —
-  //    a plain FYI note alongside the CLEAR banner, not a caution. Neither
-  //    case changes the banner severity, the score, or skips anything.
+  //    a plain FYI note, not a caution.
+  // 3) NEW: transactional/monetary language present (ACH, invoice, direct
+  //    deposit, gift card, wire, payment, etc.) — shown ALWAYS regardless of
+  //    overall score, since a mention of money/transactions deserves the
+  //    reader's attention even when nothing else pushed the score down much.
+  // None of these change the banner severity, the score, or skip anything —
+  // purely additional context alongside whatever else is already showing.
   const alertContext = document.getElementById("alert-context");
   const emailTypeResult = results.find(r => r.name === "Email Type");
   const salesPitchResult = results.find(r => r.name === "Sales Pitch Tone");
+  const financialResult = results.find(r => r.name === "Financial Request");
+  const giftCardResult = results.find(r => r.name === "Gift Card / Crypto");
   const isMarketing  = emailTypeResult  && emailTypeResult.badge  === "MARKETING/VENDOR";
   const isSalesPitch = salesPitchResult && salesPitchResult.badge === "SALES PITCH";
+  const hasTransactionalLanguage = (financialResult && financialResult.weight > 0) ||
+    (giftCardResult && giftCardResult.weight > 0);
 
+  const contextNotes = [];
   if (isMarketing && bannerClass !== "safe") {
-    alertContext.textContent = "ℹ️ This appears to be a marketing, sales, or vendor email — flags like shortened links or tracking redirects are common in these communications. Still worth a quick look before clicking, just with that context in mind.";
-    alertContext.style.display = "block";
-  } else if (isSalesPitch && bannerClass === "safe") {
-    alertContext.textContent = "📣 Please note, this email reads like a sales pitch or cold outreach — nothing here raised a security concern, just flagging the tone.";
+    contextNotes.push("ℹ️ This appears to be a marketing, sales, or vendor email — flags like shortened links or tracking redirects are common in these communications. Still worth a quick look before clicking, just with that context in mind.");
+  }
+  if (isSalesPitch && bannerClass === "safe") {
+    contextNotes.push("📣 Please note, this email reads like a sales pitch or cold outreach — nothing here raised a security concern, just flagging the tone.");
+  }
+  if (hasTransactionalLanguage) {
+    contextNotes.push("💰 This email mentions money or a transaction (invoice, ACH, direct deposit, gift card, wire, payment, etc.) — always verify requests like this through a separate, known channel before acting, regardless of how safe the rest of this email looks.");
+  }
+
+  alertContext.textContent = "";
+  if (contextNotes.length > 0) {
+    contextNotes.forEach(note => {
+      const line = document.createElement("div");
+      line.textContent = note;
+      line.style.marginTop = "6px";
+      alertContext.appendChild(line);
+    });
     alertContext.style.display = "block";
   } else {
     alertContext.style.display = "none";
@@ -4106,7 +4161,7 @@ const CHECK_GLOSSARY = {
   "Credential Harvesting": "Looks for language and links typically used to trick someone into typing a username and password into a fake login page.",
   "Gift Card / Crypto": "Flags requests for gift cards, cryptocurrency, or peer-to-peer payment apps — a hallmark of executive-impersonation scams.",
   "Cloud Link Check": "Flags fake notifications for SharePoint, OneDrive, Google Drive, Dropbox, Teams, DocuSign, Adobe Sign, or voicemail that don't match the sender's real identity — a common credential-phishing lure.",
-  "Financial Brand Impersonation": "Flags an email that presents itself as an official notice from a known financial brand (PayPal, a bank, a payment processor) right at the top, while the sender's actual domain has no relationship to that brand at all — a classic fake-invoice scam pattern.",
+  "Official Brand Impersonation": "Flags an email that presents itself as an official notice from a well-known brand (PayPal, Amazon, UPS, a bank, Apple, the IRS, etc.) right at the top, while the sender's actual domain has no relationship to that brand at all — a classic impersonation-scam pattern.",
   "Device Code Phishing": "Flags a fake share/message notification combined with instructions to enter a code on another page — the signature of device-code phishing, a sophisticated attack that can hand over your account with no password or MFA prompt, even when the page really is microsoft.com.",
   "Hidden Character Check": "Looks for invisible characters hidden inside words — a trick used to sneak trigger words (like 'invoice' or 'wire') past keyword scanners.",
   "BEC Triple Signal": "Fires when several separate moderate warning signs stack up together at once, which is a stronger indicator of fraud than any single flag alone.",
