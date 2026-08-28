@@ -4192,10 +4192,12 @@ function renderSafetyResults(results) {
   const salesPitchResult = results.find(r => r.name === "Sales Pitch Tone");
   const financialResult = results.find(r => r.name === "Financial Request");
   const giftCardResult = results.find(r => r.name === "Gift Card / Crypto");
+  const attachmentsResult = results.find(r => r.name === "Attachments");
   const isMarketing  = emailTypeResult  && emailTypeResult.badge  === "MARKETING/VENDOR";
   const isSalesPitch = salesPitchResult && salesPitchResult.badge === "SALES PITCH";
   const hasTransactionalLanguage = (financialResult && financialResult.weight > 0) ||
     (giftCardResult && giftCardResult.weight > 0);
+  const hasAttachment = attachmentsResult && attachmentsResult.badge !== "NONE";
 
   const contextNotes = [];
   if (isMarketing && bannerClass !== "safe") {
@@ -4206,6 +4208,9 @@ function renderSafetyResults(results) {
   }
   if (hasTransactionalLanguage) {
     contextNotes.push("💰 This email mentions money or a transaction (invoice, ACH, direct deposit, gift card, wire, payment, etc.) — always verify requests like this through a separate, known channel before acting, regardless of how safe the rest of this email looks.");
+  }
+  if (hasAttachment) {
+    contextNotes.push("📎 NOTICE — This email has an attachment. Even when nothing specific was flagged, attachments are only checked by filename and type, not scanned for malicious content — be careful opening it, especially if the sender or context is at all unfamiliar.");
   }
 
   alertContext.textContent = "";
