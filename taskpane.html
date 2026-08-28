@@ -1165,6 +1165,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkMicrosoftSpamSignals(internetHeaders)),
     Promise.resolve(checkThreadIntegrity(subject, internetHeaders, bodyText, senderDomain, recipientDomain)),
     Promise.resolve(checkAttachments(attachments, bodyText)),
+    checkPdfAttachmentLinks(attachments),
     Promise.resolve(checkCredentialHarvesting(subject, bodyText)),
     Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
     Promise.resolve(checkUrgencySecrecyAuthority(subject, bodyText)),
@@ -3241,6 +3242,119 @@ function checkThreadIntegrity(subject, headers, bodyText, senderDomain, recipien
 }
 
 // ── CHECK: Attachment risk (including PDF, HTML, double extension) ─────────────
+// ── CHECK: Links embedded inside PDF attachments ────────────────────────────
+// Every other check in this file only ever sees the email's own body text —
+// a link hidden inside an attachment is a complete blind spot, and this is
+// exactly the gap that let a malicious redirect chain inside a PDF score 80%
+// "Mostly Safe." This closes it as far as is practically possible: PDF
+// hyperlink annotations store their target as a "/URI (http://...)" entry in
+// the document's own object structure — typically left uncompressed even
+// when the visible page content is compressed — so a plain text scan of the
+// raw bytes can often find them without needing a full PDF parser.
+//
+// Two honest limits worth being direct about: (1) this uses
+// getAttachmentContentAsync, an Office.js API not used anywhere else in this
+// project — it's defensively coded to fail open silently if unsupported on a
+// given client, exactly like the RDAP/SPF lookups, but it hasn't been proven
+// across every Outlook client the way the rest of this file has. (2) A PDF
+// that deliberately obfuscates or fully compresses its link annotations could
+// still evade this — it meaningfully narrows the blind spot, it doesn't
+// eliminate it.
+const MAX_PDF_ATTACHMENT_BYTES = 3 * 1024 * 1024; // 3MB cap — stay fast, avoid hanging on large files
+const PDF_CONTENT_TIMEOUT_MS = 6000;
+
+function getAttachmentContentWithTimeout(attachmentId) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, PDF_CONTENT_TIMEOUT_MS);
+    try {
+      Office.context.mailbox.item.getAttachmentContentAsync(attachmentId, (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (result && result.status === Office.AsyncResultStatus.Succeeded &&
+            result.value && result.value.format === Office.MailboxEnums.AttachmentContentFormat.Base64) {
+          resolve(result.value.content);
+        } else {
+          resolve(null);
+        }
+      });
+    } catch (_) {
+      if (!settled) { settled = true; clearTimeout(timer); resolve(null); }
+    }
+  });
+}
+
+function extractUrlsFromPdfBase64(base64Content) {
+  try {
+    const binary = atob(base64Content);
+    const uriMatches = binary.match(/\/URI\s*\(([^)]+)\)/g) || [];
+    const urls = uriMatches
+      .map(m => { const inner = m.match(/\(([^)]+)\)/); return inner ? inner[1] : null; })
+      .filter(u => u && /^https?:\/\//i.test(u));
+    return [...new Set(urls)];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function checkPdfAttachmentLinks(attachments) {
+  const pdfAttachments = (attachments || []).filter(a =>
+    (a.contentType === "application/pdf" || (a.name || "").toLowerCase().endsWith(".pdf")) &&
+    a.attachmentType !== "cloud" &&
+    (a.size || 0) > 0 && (a.size || 0) <= MAX_PDF_ATTACHMENT_BYTES
+  );
+  if (pdfAttachments.length === 0) {
+    return { name:"PDF Attachment Links", icon:"✅", status:"pass", badge:"N/A",
+      desc:"No PDF attachments to analyze.", weight:0 };
+  }
+
+  let anyContentRead = false;
+  const suspiciousFindings = [];
+
+  for (const pdf of pdfAttachments) {
+    let content = null;
+    try { content = await getAttachmentContentWithTimeout(pdf.id); } catch (_) { content = null; }
+    if (!content) continue;
+    anyContentRead = true;
+
+    const urls = extractUrlsFromPdfBase64(content);
+    for (const url of urls) {
+      try {
+        const hostMatch = url.match(/^https?:\/\/([^\/?#]+)/i);
+        if (!hostMatch) continue;
+        const hostname = hostMatch[1].toLowerCase();
+        const labels = hostname.split(".");
+        const baseDomain = labels.length > 2 ? labels.slice(-2).join(".") : hostname;
+
+        const lookalike  = checkLookalike(baseDomain);
+        const homoglyph   = checkHomoglyphs(baseDomain);
+        const numberSub   = checkNumberSubstitution(baseDomain);
+        const brandTrick  = checkBrandInHostname(hostname, baseDomain);
+
+        const flagged = [lookalike, homoglyph, numberSub].find(r => r.status === "fail" || r.status === "warn");
+        if (flagged) {
+          suspiciousFindings.push(`"${pdf.name}" contains a link to "${hostname}" — ${flagged.desc}`);
+        } else if (brandTrick) {
+          suspiciousFindings.push(`"${pdf.name}" contains a link to "${hostname}" — ${brandTrick}`);
+        }
+      } catch (_) { continue; }
+    }
+  }
+
+  if (suspiciousFindings.length > 0) {
+    return { name:"PDF Attachment Links", icon:"🚨", status:"fail", badge:"SUSPICIOUS PDF LINK",
+      desc: suspiciousFindings[0], weight: 45 };
+  }
+  if (!anyContentRead) {
+    return { name:"PDF Attachment Links", icon:"⚠️", status:"warn", badge:"UNVERIFIED PDF",
+      desc:`This email has a PDF attachment (${pdfAttachments[0].name}) whose contents could not be automatically checked for embedded links — this may be unsupported in your current Outlook client. Open PDF attachments with caution, especially if they direct you to click a link inside; hover over any link before clicking to see its real destination.`,
+      weight: 12 };
+  }
+  return { name:"PDF Attachment Links", icon:"✅", status:"pass", badge:"CLEAN",
+    desc:`Checked link(s) inside ${pdfAttachments.length} PDF attachment(s) — nothing suspicious found. Note: this checks standard hyperlink annotations only, not every possible way a link could be hidden in a PDF.`, weight:0 };
+}
+
 function checkAttachments(attachments, bodyText) {
   if (!attachments || attachments.length === 0) {
     return { name:"Attachments", icon:"✅", status:"pass", badge:"NONE", desc:"No attachments detected.", weight:0 };
@@ -4158,6 +4272,7 @@ const CHECK_GLOSSARY = {
   "Spam Signals (M365)": "Uses Microsoft 365's own built-in spam-confidence score for this message, on top of everything this add-in checks separately.",
   "Thread Integrity": "Checks whether a 'Re:' or 'Fwd:' reply actually matches a real prior conversation, catching fake reply chains used to look trustworthy.",
   "Attachments": "Scans attached files for risky types and tricks — double file extensions, password-protected archives, or files disguised as something safer.",
+  "PDF Attachment Links": "Looks inside PDF attachments for embedded hyperlinks and checks those links the same way as links in the email body — catches a malicious redirect hidden inside a PDF rather than the message itself. Checks standard hyperlink annotations only; a deliberately obfuscated PDF could still evade this.",
   "Credential Harvesting": "Looks for language and links typically used to trick someone into typing a username and password into a fake login page.",
   "Gift Card / Crypto": "Flags requests for gift cards, cryptocurrency, or peer-to-peer payment apps — a hallmark of executive-impersonation scams.",
   "Cloud Link Check": "Flags fake notifications for SharePoint, OneDrive, Google Drive, Dropbox, Teams, DocuSign, Adobe Sign, or voicemail that don't match the sender's real identity — a common credential-phishing lure.",
