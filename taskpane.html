@@ -1164,7 +1164,7 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkOnBehalfOfSender(internetHeaders, senderEmail, recipientDomain)),
     Promise.resolve(checkMicrosoftSpamSignals(internetHeaders)),
     Promise.resolve(checkThreadIntegrity(subject, internetHeaders, bodyText, senderDomain, recipientDomain)),
-    Promise.resolve(checkAttachments(attachments, bodyText)),
+    Promise.resolve(checkAttachments(attachments, bodyText, senderDomain, recipientDomain)),
     checkPdfAttachmentLinks(attachments),
     Promise.resolve(checkCredentialHarvesting(subject, bodyText)),
     Promise.resolve(checkGiftCardCrypto(subject, bodyText)),
@@ -1431,7 +1431,14 @@ function checkSubject(subject) {
   const suspiciousSpaces = spacedMatches.filter(m => {
     const combined = m.replace(/\s+/g,'').toLowerCase();
     if (combined.length <= 5 || commonPhrases.has(m.toLowerCase())) return false;
-    return SPACED_EVASION_WORDS.some(w => combined === w || combined.includes(w));
+    // Exact match only: the whole two-part phrase, once the space is removed,
+    // IS exactly one evasion word (e.g. "Sec urity" -> "security"). That's the
+    // real evasion pattern — one word awkwardly split by a space. Using
+    // "includes" here previously caught any two ordinary, unrelated words
+    // whose concatenation merely CONTAINED an evasion word as a substring
+    // (e.g. "Fall Security" -> "fallsecurity" contains "security") — two
+    // completely normal words next to each other, not an evasion attempt.
+    return SPACED_EVASION_WORDS.includes(combined);
   });
   if (suspiciousSpaces.length > 0) {
     issues.push(`Subject contains word(s) with suspicious spacing: "${suspiciousSpaces[0]}" — possible spam filter bypass attempt`);
@@ -3355,7 +3362,7 @@ async function checkPdfAttachmentLinks(attachments) {
     desc:`Checked link(s) inside ${pdfAttachments.length} PDF attachment(s) — nothing suspicious found. Note: this checks standard hyperlink annotations only, not every possible way a link could be hidden in a PDF.`, weight:0 };
 }
 
-function checkAttachments(attachments, bodyText) {
+function checkAttachments(attachments, bodyText, senderDomain, recipientDomain) {
   if (!attachments || attachments.length === 0) {
     return { name:"Attachments", icon:"✅", status:"pass", badge:"NONE", desc:"No attachments detected.", weight:0 };
   }
@@ -3368,10 +3375,18 @@ function checkAttachments(attachments, bodyText) {
     "docm","xlsm","pptm","dotm","xltm","potm","ppam","xlam","xlsb"]);
   const archiveTypes  = new Set(["zip","rar","7z","tar","gz","ace"]);
 
-  // PDF is medium risk on its own but high risk if body has credential harvesting language
-  const credTerms = ["review","sign","verify","confirm","click","open","view document","secure"];
+  // PDF is medium risk on its own but higher risk if body has SPECIFIC
+  // signature-request language — not just any generic word like "review" or
+  // "confirm", which are extremely common in completely ordinary
+  // correspondence ("please review and proofread the attached draft" is a
+  // routine internal request, not a phishing signal).
+  const credTerms = ["review and sign","sign the document","signature required",
+    "signature requested","requested your signature","waiting for your signature",
+    "document ready for signature","please sign the attached","click to sign","sign here"];
   const bodyLower = (bodyText || "").toLowerCase();
   const bodyHasCredTerms = credTerms.some(t => bodyLower.includes(t));
+  const isInternal = senderDomain && recipientDomain &&
+    (senderDomain === recipientDomain || senderDomain.endsWith("." + recipientDomain));
 
   const issues = [];
   let weight = 0;
@@ -3403,9 +3418,11 @@ function checkAttachments(attachments, bodyText) {
       weight += 35; continue;
     }
 
-    // PDF with credential context
-    if (ext === "pdf" && bodyHasCredTerms) {
-      issues.push(`"${att.name}" — PDF attachment combined with document review/sign language. Often used in credential phishing (fake DocuSign, Adobe Sign, shared document lures).`);
+    // PDF with credential context — only meaningful for external mail; an
+    // internal colleague asking a colleague to review/sign a draft is a
+    // categorically different, benign pattern.
+    if (ext === "pdf" && bodyHasCredTerms && !isInternal) {
+      issues.push(`"${att.name}" — PDF attachment combined with signature-request language. Often used in credential phishing (fake DocuSign, Adobe Sign, shared document lures).`);
       weight += 20; continue;
     }
 
