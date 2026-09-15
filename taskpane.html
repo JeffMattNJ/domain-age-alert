@@ -1267,6 +1267,27 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
         desc:"Authentication failure + name mismatch + financial request — three independent fraud signals simultaneously. Extremely high confidence fraud attempt.", weight:35 });
     }
 
+    // Foreign domain + random username = throwaway/compromised account
+    const hasForeignDomain  = results.some(r => r.name === "Foreign Domain" && r.status !== "pass");
+    const hasRandomUsername = results.some(r => r.name === "Username Check" && r.badge === "RANDOM USERNAME");
+    const hasImpersonal     = results.some(r => r.name === "Greeting Check" && r.badge === "IMPERSONAL GREETING");
+
+    if (hasForeignDomain && hasRandomUsername) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"SUSPICIOUS ACCOUNT",
+        desc:"Foreign country domain AND randomly generated username detected together — strong indicators of a throwaway, compromised, or bot account used for phishing.",
+        weight:20 });
+    }
+    if (hasImpersonal && hasForeignDomain) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"MASS PHISHING PATTERN",
+        desc:"Generic impersonal greeting AND foreign domain — hallmark of a mass phishing campaign that does not know your name.",
+        weight:20 });
+    }
+    if (hasImpersonal && hasRandomUsername && hasFinancialFlag) {
+      results.push({ name:"Combined Risk", icon:"🚨", status:"fail", badge:"PHISHING CAMPAIGN",
+        desc:"Generic greeting + random username + financial language — three signals of a mass phishing campaign targeting financial information.",
+        weight:25 });
+    }
+
     renderSafetyResults(results);
 
   } catch (err) {
@@ -2301,7 +2322,7 @@ function checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain) {
   recipientDomain = recipientDomain || "";
   if (!bodyText || bodyText.length < 10) {
     return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
-      desc:"No body text available to analyze.", weight:0 };
+      desc:"Body Contact Check: Scans for email addresses in the message body that redirect replies to a different domain than the sender — a common BEC tactic. No body text to analyze.", weight:0 };
   }
 
   // Use full body cleaner — strips signatures, CAUTION banners, quoted replies
@@ -2312,7 +2333,7 @@ function checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain) {
 
   if (matches.length === 0) {
     return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
-      desc:"No contact email addresses found in message body.", weight:0 };
+      desc:"Body Contact Check: No other email addresses found in the message body. No redirect attempts detected.", weight:0 };
   }
 
   // Build ignore list — never flag our own org or sender domain
@@ -2345,13 +2366,13 @@ function checkBodyEmailMismatch(senderDomain, bodyText, recipientDomain) {
       icon: "🚨",
       status: "fail",
       badge: "CONTACT MISMATCH",
-      desc: `Body contains redirect instructions to a different domain: ${foreignDomains.slice(0,2).join(', ')}. Sender is from "${senderDomain}" — classic BEC redirect tactic.`,
+      desc: `Body Contact Check ALERT: This email tries to redirect your reply to a different domain (${foreignDomains.slice(0,2).join(', ')}) than the sender's domain (${senderDomain}). This is a classic Business Email Compromise tactic — do not reply or send information to the address in the body.`,
       weight: 40
     };
   }
 
   return { name:"Body Contact Check", icon:"✅", status:"pass", badge:"CLEAN",
-    desc:"No suspicious contact redirects detected in message body.", weight:0 };
+    desc:"Body Contact Check: No suspicious redirect instructions detected. If email addresses from other domains appear in the body, they do not include redirect language.", weight:0 };
 }
 
 // ── CHECK 13: BEC / urgency language patterns ──────────────────────────────────
@@ -4075,6 +4096,226 @@ function checkHiddenCharacters(subject, bodyText) {
   };
 }
 
+
+
+// ── CHECK: Foreign country domain ─────────────────────────────────────────────
+// Flags emails from country-code TLDs (.au, .de, .in, .ru, etc.)
+// when the recipient org appears to be US-based
+function checkForeignDomain(senderDomain, recipientDomain) {
+  // Common ccTLDs that are foreign to a US org
+  // Excludes .ca (Canada) and .uk/.gb (UK) as these are common legitimate partners
+  const highRiskCcTLDs = [
+    // Asia-Pacific
+    '.au','.com.au','.net.au','.org.au',  // Australia (could be legit but flag)
+    '.cn','.com.cn',  // China
+    '.in','.co.in',   // India
+    '.jp','.co.jp',   // Japan
+    '.kr','.co.kr',   // South Korea
+    '.vn','.com.vn',  // Vietnam
+    '.ph','.com.ph',  // Philippines
+    '.id','.co.id',   // Indonesia
+    '.my','.com.my',  // Malaysia
+    '.sg','.com.sg',  // Singapore
+    '.hk','.com.hk',  // Hong Kong
+    '.tw','.com.tw',  // Taiwan
+    '.pk','.com.pk',  // Pakistan
+    '.bd','.com.bd',  // Bangladesh
+    // Eastern Europe / Russia
+    '.ru','.com.ru',  // Russia
+    '.ua','.com.ua',  // Ukraine
+    '.ro',           // Romania
+    '.bg',           // Bulgaria
+    '.md',           // Moldova
+    // Africa
+    '.ng','.com.ng',  // Nigeria
+    '.za','.co.za',   // South Africa
+    '.ke','.co.ke',   // Kenya
+    '.gh','.com.gh',  // Ghana
+    // Middle East
+    '.ir',           // Iran
+    '.sa','.com.sa',  // Saudi Arabia
+    '.ae','.com.ae',  // UAE (lower risk but flag)
+    // Latin America
+    '.br','.com.br',  // Brazil
+    '.mx','.com.mx',  // Mexico
+    '.co',           // Colombia (also used as generic TLD)
+    '.ar',           // Argentina
+    // Europe (flag but lower weight)
+    '.de',           // Germany
+    '.fr',           // France
+    '.it',           // Italy
+    '.es',           // Spain
+    '.pl',           // Poland
+    '.nl',           // Netherlands
+    '.se',           // Sweden
+    '.no',           // Norway
+    '.dk',           // Denmark
+    '.fi',           // Finland
+    '.cz',           // Czech Republic
+    '.hu',           // Hungary
+    '.sk',           // Slovakia
+    '.at',           // Austria
+    '.ch',           // Switzerland
+    '.be',           // Belgium
+    '.pt',           // Portugal
+    '.gr',           // Greece
+    '.tr',           // Turkey
+  ];
+
+  // Higher risk ccTLDs (known phishing hotspots)
+  const highRiskSpecific = ['.ru','.cn','.com.cn','.ng','.com.ng','.pk','.com.pk','.ir','.bd'];
+
+  const domainLower = senderDomain.toLowerCase();
+
+  // Check if sender domain ends with any foreign ccTLD
+  const matchedTld = highRiskCcTLDs.find(tld => domainLower.endsWith(tld));
+
+  if (!matchedTld) {
+    return { name:"Foreign Domain", icon:"✅", status:"pass", badge:"DOMESTIC",
+      desc:"Sender domain does not use a foreign country-code domain extension.", weight:0 };
+  }
+
+  const isHighRisk = highRiskSpecific.some(tld => domainLower.endsWith(tld));
+  const countryMap = {
+    '.au':'Australia','.com.au':'Australia',
+    '.cn':'China','.com.cn':'China',
+    '.in':'India','.co.in':'India',
+    '.ru':'Russia','.com.ru':'Russia',
+    '.de':'Germany','.fr':'France','.it':'Italy',
+    '.ng':'Nigeria','.com.ng':'Nigeria',
+    '.pk':'Pakistan','.com.pk':'Pakistan',
+    '.ir':'Iran','.br':'Brazil','.com.br':'Brazil',
+    '.mx':'Mexico','.co.mx':'Mexico',
+    '.jp':'Japan','.co.jp':'Japan',
+    '.kr':'South Korea','.co.kr':'South Korea',
+    '.ua':'Ukraine','.com.ua':'Ukraine',
+    '.tr':'Turkey','.ae':'UAE','.com.ae':'UAE',
+    '.sa':'Saudi Arabia','.za':'South Africa','.co.za':'South Africa',
+  };
+  const country = countryMap[matchedTld] || `country code "${matchedTld}"`;
+
+  if (isHighRisk) {
+    return {
+      name:"Foreign Domain", icon:"🚨", status:"fail", badge:"HIGH-RISK COUNTRY",
+      desc:`Sender domain "${senderDomain}" is registered in ${country} (${matchedTld}). This region has elevated phishing and fraud activity. Verify this sender is expected before clicking any links or providing information.`,
+      weight:25
+    };
+  }
+
+  return {
+    name:"Foreign Domain", icon:"⚠️", status:"warn", badge:"FOREIGN DOMAIN",
+    desc:`Sender domain "${senderDomain}" is registered in ${country} (${matchedTld}). If you are not expecting international correspondence, verify this sender before responding.`,
+    weight:12
+  };
+}
+
+// ── CHECK: Random/bot-generated username ──────────────────────────────────────
+// Detects usernames like "chun5JUv3", "xK9mPq2w", "aB3cD7eF" 
+// that follow patterns of auto-generated credentials
+function checkRandomUsername(senderEmail) {
+  const username = senderEmail.split('@')[0] || '';
+  if (username.length < 4) {
+    return { name:"Username Check", icon:"✅", status:"pass", badge:"OK",
+      desc:"Username too short to analyze for randomness.", weight:0 };
+  }
+
+  // Signals of a randomly generated / bot username:
+  // 1. Mixed case (camelCase with numbers) e.g. "chun5JUv3"
+  // 2. High ratio of uppercase within mixed case
+  // 3. Contains embedded numbers in non-sequential pattern
+  // 4. No recognizable word fragments (all consonants or no pattern)
+
+  const hasLower     = /[a-z]/.test(username);
+  const hasUpper     = /[A-Z]/.test(username);
+  const hasNumber    = /[0-9]/.test(username);
+  const hasMixedCase = hasLower && hasUpper;
+
+  // Check for alternating case + numbers pattern (strong bot signal)
+  // e.g. chun5JUv3, aB3cD, xK9mPq
+  const mixedCaseWithNumbers = hasMixedCase && hasNumber;
+
+  // Count uppercase letters ratio
+  const upperCount  = (username.match(/[A-Z]/g) || []).length;
+  const upperRatio  = upperCount / username.length;
+
+  // Check for sequential number patterns (not random)
+  const hasSequential = /123|234|345|456|567|678|789|890/.test(username);
+
+  // Vowel ratio — real names usually have vowels
+  const vowelCount = (username.toLowerCase().match(/[aeiou]/g) || []).length;
+  const vowelRatio  = vowelCount / username.replace(/[^a-zA-Z]/g,'').length;
+
+  // Common legitimate patterns to exclude
+  const commonPatterns = [
+    /^[a-z]+\.[a-z]+\d*$/i,           // firstname.lastname or firstname.lastname2
+    /^[a-z]+_[a-z]+\d*$/i,            // firstname_lastname
+    /^[a-z]{1,3}\d+$/i,               // jcr123 style IT usernames
+    /^[a-z]+\d{1,4}$/i,               // john2024 style
+    /^info$|^hello$|^admin$|^support$|^noreply$/i, // generic (caught elsewhere)
+  ];
+
+  const looksLegitimate = commonPatterns.some(p => p.test(username));
+
+  if (looksLegitimate) {
+    return { name:"Username Check", icon:"✅", status:"pass", badge:"OK",
+      desc:`Username "${username}" follows a recognizable naming pattern.`, weight:0 };
+  }
+
+  // Flag: mixed case + number in non-sequential pattern = likely auto-generated
+  if (mixedCaseWithNumbers && !hasSequential && upperRatio > 0.15 && upperRatio < 0.85) {
+    return {
+      name:"Username Check", icon:"⚠️", status:"warn", badge:"RANDOM USERNAME",
+      desc:`Username "${username}" appears to be randomly generated (mixed case with embedded numbers). This pattern is common in compromised accounts, bot accounts, or throwaway email addresses used for phishing.`,
+      weight:15
+    };
+  }
+
+  // Flag: very low vowel ratio (consonant-heavy = likely random)
+  if (vowelRatio < 0.15 && username.replace(/[^a-zA-Z]/g,'').length >= 5) {
+    return {
+      name:"Username Check", icon:"⚠️", status:"warn", badge:"RANDOM USERNAME",
+      desc:`Username "${username}" has very few vowels — likely a randomly generated string rather than a real person's name or identifier.`,
+      weight:12
+    };
+  }
+
+  return { name:"Username Check", icon:"✅", status:"pass", badge:"OK",
+    desc:`Username "${username}" does not show obvious signs of being randomly generated.`, weight:0 };
+}
+
+// ── CHECK: Generic/impersonal greeting detection ──────────────────────────────
+// "System User", "Dear Customer", "Dear User" etc. in body = phishing tell
+function checkImpersonalGreeting(bodyText, senderDomain) {
+  if (!bodyText) return { name:"Greeting Check", icon:"✅", status:"pass", badge:"CLEAR",
+    desc:"Greeting Check: No body text to analyze.", weight:0 };
+
+  const cleanBody = cleanBodyForAnalysis(bodyText);
+  const bodyLower  = cleanBody.toLowerCase().slice(0, 500); // Check just the top of the email
+
+  const impersonalGreetings = [
+    'system user','dear user','dear customer','dear account holder',
+    'dear member','dear client','dear valued customer','dear valued member',
+    'dear beneficiary','dear winner','dear applicant','dear recipient',
+    'hello user','hi user','greetings user','attention user',
+    'dear email user','dear account owner','dear sir/madam',
+    'to whom it may concern','dear undisclosed recipient',
+    'hello there,
+','attention:',
+  ];
+
+  const found = impersonalGreetings.find(g => bodyLower.includes(g));
+
+  if (found) {
+    return {
+      name:"Greeting Check", icon:"⚠️", status:"warn", badge:"IMPERSONAL GREETING",
+      desc:`Greeting Check: Email uses an impersonal greeting ("${found}") instead of your name. Legitimate organizations you have a relationship with use your actual name. This is common in mass phishing campaigns.`,
+      weight:15
+    };
+  }
+
+  return { name:"Greeting Check", icon:"✅", status:"pass", badge:"PERSONALIZED",
+    desc:"Greeting Check: Email uses a personalized greeting — no generic mass-mailing patterns detected.", weight:0 };
+}
 
 // ── Render safety percentage circle ─────────────────────────────────────────
 function renderSafetyCircle(safeScore, results, bannerClass) {
