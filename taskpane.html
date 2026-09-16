@@ -4302,8 +4302,7 @@ function checkImpersonalGreeting(bodyText, senderDomain) {
     'hello user','hi user','greetings user','attention user',
     'dear email user','dear account owner','dear sir/madam',
     'to whom it may concern','dear undisclosed recipient',
-    'hello there,
-','attention:',
+    'hello there,','attention:',
   ];
 
   const found = impersonalGreetings.find(g => bodyLower.includes(g));
