@@ -1106,8 +1106,8 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
   // used for matching so nothing downstream is blind to the real words.
   const rawBodyText = bodyText;
   const rawSubject  = subject || "";
-  bodyText = bodyText.replace(/\p{Cf}/gu, "");
-  subject  = rawSubject.replace(/\p{Cf}/gu, "");
+  bodyText = bodyText.replace(/[\u00AD\u200B\u200C\u200D\u200E\u200F\u2028\u2029\u2060\u2061\u2062\u2063\u2064\uFEFF\u180E]/g, "");
+  subject  = rawSubject.replace(/[\u00AD\u200B\u200C\u200D\u200E\u200F\u2028\u2029\u2060\u2061\u2062\u2063\u2064\uFEFF\u180E]/g, "");
 
   if (!senderEmail) {
     const item = Office.context.mailbox.item;
@@ -1176,6 +1176,9 @@ async function runSafetyCheck(senderEmail, senderName, senderDomain, subject, re
     Promise.resolve(checkBodyUrls(bodyText, senderDomain)),
     Promise.resolve(checkEmailType(bodyText, internetHeaders)),
     Promise.resolve(checkSalesPitchTone(bodyText, senderEmail)),
+    Promise.resolve(checkForeignDomain(senderDomain, recipientDomain)),
+    Promise.resolve(checkRandomUsername(senderEmail)),
+    Promise.resolve(checkImpersonalGreeting(bodyText, senderDomain)),
     ]);
 
     setSafetyStatus("");
@@ -4069,7 +4072,7 @@ function checkHiddenCharacters(subject, bodyText) {
   // Only counts when an invisible/format character sits directly between two
   // letters — a trailing zero-width space at the end of a signature or a lone
   // BOM at the start of a message is common and benign, so those don't count.
-  const injectionPattern = /[a-zA-Z]+(?:\p{Cf}+[a-zA-Z]+)+/gu;
+  const injectionPattern = /[a-zA-Z]+(?:[\u00AD\u200B\u200C\u200D\u200E\u200F\u2060\uFEFF\u180E]+[a-zA-Z]+)+/g;
   const matches = combined.match(injectionPattern) || [];
 
   if (matches.length === 0) {
@@ -4079,7 +4082,7 @@ function checkHiddenCharacters(subject, bodyText) {
 
   // Show the affected word(s) with the invisible characters stripped so the
   // person can actually see what word was being disguised.
-  const cleanedWords = [...new Set(matches.map(m => m.replace(/\p{Cf}/gu, "")))];
+  const cleanedWords = [...new Set(matches.map(m => m.replace(/[\u00AD\u200B\u200C\u200D\u200E\u200F\u2028\u2029\u2060\u2061\u2062\u2063\u2064\uFEFF\u180E]/g, "")))];
   const sample = cleanedWords.slice(0, 2).join('", "');
 
   if (matches.length >= 3) {
