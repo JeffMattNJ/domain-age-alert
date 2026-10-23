@@ -1,189 +1,27 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8"/>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <title>Is This Legit? - Commands</title>
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <script>
-    /**
-     * commands.html — Background event handler
+    /*
+     * commands.html - FunctionFile for "Is This Legit?"
      *
-     * Auto-opens the taskpane ONLY when domain age is a risk:
-     *   🔴 Under 90 days  → auto-open taskpane + red notification bar
-     *   🟡 90 days–1 year → auto-open taskpane + yellow notification bar
-     *   ✅ Over 1 year    → silent, no action, no interruption
+     * The manifest (VersionOverrides > DesktopFormFactor > FunctionFile)
+     * must point at a reachable page that loads Office.js. Classic Outlook,
+     * new Outlook and Outlook on the web all require it, even though the
+     * ribbon button uses ShowTaskpane and never calls a function here.
      *
-     * Security:    HTTPS-only fetches, 5s timeout, XSS-safe
-     * Performance: 24h localStorage cache, known-safe domain skip list
-     * Safety:      Silent fail on all errors — never blocks mail flow
+     * Kept deliberately minimal and ES5-only so it loads in every Outlook
+     * webview (WebView2, EdgeHTML and the legacy IE11 engine).
+     * All analysis lives in taskpane.html.
      */
-
-    const CACHE_PREFIX  = 'domainAge_v1_';
-    const CACHE_TTL_MS  = 24 * 60 * 60 * 1000; // 24 hours
-    const FETCH_TIMEOUT = 5000;                  // 5 seconds
-
-    Office.onReady(() => {});
-
-    // ── Main handler — called by Outlook on message open ──────────────────────
-    async function onMessageReadHandler(event) {
-      try {
-        const item = Office.context.mailbox.item;
-        if (!item?.from?.emailAddress) { event.completed(); return; }
-
-        const domain = item.from.emailAddress.split("@")[1]?.toLowerCase();
-        if (!domain) { event.completed(); return; }
-
-        // Skip well-known safe providers — no RDAP call needed
-        const knownSafe = [
-          "gmail.com","yahoo.com","outlook.com","hotmail.com",
-          "icloud.com","microsoft.com","apple.com","amazon.com",
-          "google.com","live.com","msn.com","office365.com"
-        ];
-        if (knownSafe.includes(domain)) { event.completed(); return; }
-
-        const createdDate = await getCachedOrLookup(domain);
-        if (!createdDate) { event.completed(); return; }
-
-        const diffDays = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
-
-        // ── Safe — over 1 year: do nothing, no interruption ───────────────────
-        if (diffDays > 365) {
-          // Clear any previous alert from an older email
-          Office.context.mailbox.item.notificationMessages.removeAsync(
-            "domainAgeAlert"
-          );
-          event.completed();
-          return;
-        }
-
-        // ── Under 90 days — RED: auto-open + red notification bar ─────────────
-        if (diffDays <= 90) {
-          let msg;
-          if (diffDays <= 3) {
-            msg = `🚨 CRITICAL: "${domain}" is only ${diffDays} day(s) old — likely phishing!`;
-          } else if (diffDays <= 7) {
-            msg = `🚨 WARNING: "${domain}" registered ${diffDays} days ago — high phishing risk.`;
-          } else if (diffDays <= 30) {
-            msg = `🚨 HIGH RISK: "${domain}" registered ${diffDays} days ago. Verify before acting.`;
-          } else {
-            msg = `⛔ CAUTION: "${domain}" is only ${diffDays} days old. Proceed carefully.`;
-          }
-
-          // Show red notification bar
-          Office.context.mailbox.item.notificationMessages.replaceAsync(
-            "domainAgeAlert",
-            {
-              type: Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage,
-              message: msg,
-              persistent: true
-            }
-          );
-
-          // Auto-open the taskpane
-          Office.context.ui.displayDialogAsync(
-            "https://JeffMattNJ.github.io/domain-age-alert/taskpane.html",
-            { height: 60, width: 30, displayInIframe: true },
-            () => {}
-          );
-
-        // ── 90 days to 1 year — YELLOW: auto-open + yellow notification bar ───
-        } else {
-          const months = Math.floor(diffDays / 30);
-          Office.context.mailbox.item.notificationMessages.replaceAsync(
-            "domainAgeAlert",
-            {
-              type: Office.MailboxEnums.ItemNotificationMessageType.WarningMessage,
-              message: `⚠️ NOTICE: "${domain}" is only ${months} month(s) old. Most established businesses have older domains.`,
-              persistent: true
-            }
-          );
-
-          // Auto-open the taskpane
-          Office.context.ui.displayDialogAsync(
-            "https://JeffMattNJ.github.io/domain-age-alert/taskpane.html",
-            { height: 60, width: 30, displayInIframe: true },
-            () => {}
-          );
-        }
-
-      } catch (_) {
-        // Silent fail — never block or delay mail reading
-      }
-
-      event.completed();
-    }
-
-    // ── Cache-aware RDAP lookup ────────────────────────────────────────────────
-    async function getCachedOrLookup(domain) {
-      try {
-        const raw = localStorage.getItem(CACHE_PREFIX + domain);
-        if (raw) {
-          const entry = JSON.parse(raw);
-          if (Date.now() - entry.ts < CACHE_TTL_MS && entry.createdDate) {
-            return new Date(entry.createdDate);
-          }
-          localStorage.removeItem(CACHE_PREFIX + domain);
-        }
-      } catch (_) {}
-
-      const createdDate = await rdapLookup(domain);
-
-      try {
-        localStorage.setItem(CACHE_PREFIX + domain, JSON.stringify({
-          createdDate: createdDate ? createdDate.toISOString() : null,
-          ts: Date.now()
-        }));
-      } catch (_) {}
-
-      return createdDate;
-    }
-
-    // ── Fetch with abort timeout ───────────────────────────────────────────────
-    async function fetchTimeout(url) {
-      const ctrl  = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
-      try {
-        const res = await fetch(url, { signal: ctrl.signal });
-        clearTimeout(timer);
-        return res;
-      } catch (e) {
-        clearTimeout(timer);
-        throw e;
-      }
-    }
-
-    // ── RDAP lookup (primary IANA + fallback rdap.org) ────────────────────────
-    async function rdapLookup(domain) {
-      try {
-        const tld  = domain.split(".").pop();
-        const bRes = await fetchTimeout("https://data.iana.org/rdap/dns.json");
-        if (bRes.ok) {
-          const boot = await bRes.json();
-          let base = null;
-          for (const [tlds, urls] of (boot.services || [])) {
-            if (tlds.includes(tld) && urls.length > 0) { base = urls[0]; break; }
-          }
-          if (base) {
-            const dRes = await fetchTimeout(`${base}domain/${domain}`);
-            if (dRes.ok) {
-              const d  = await dRes.json();
-              const ev = (d.events || []).find(e => e.eventAction === "registration");
-              if (ev) return new Date(ev.eventDate);
-            }
-          }
-        }
-      } catch (_) {}
-
-      try {
-        const res = await fetchTimeout(`https://rdap.org/domain/${domain}`);
-        if (res.ok) {
-          const d  = await res.json();
-          const ev = (d.events || []).find(e => e.eventAction === "registration");
-          if (ev) return new Date(ev.eventDate);
-        }
-      } catch (_) {}
-
-      return null;
-    }
+    Office.onReady(function () {
+      // Nothing to initialise. No ExecuteFunction or LaunchEvent handlers
+      // are declared in the manifest.
+    });
   </script>
 </head>
 <body></body>
